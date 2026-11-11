@@ -114,6 +114,9 @@ def repository_tests(root, config, policy):
     source = within(root, config.get("source", "."))
     if not isinstance(policy.get("allow_skips", False), bool):
         raise KitError("allow_skips must be a boolean")
+    allowed_reasons = policy.get("allowed_skip_reasons", [])
+    if not isinstance(allowed_reasons, list) or not all(isinstance(x, str) and x for x in allowed_reasons):
+        raise KitError("allowed_skip_reasons must be a list of nonempty strings")
     program = """import contextlib, json, pathlib, sys, unittest
 sys.path.insert(0, sys.argv[2])
 class Result(unittest.TextTestResult):
@@ -125,7 +128,8 @@ with contextlib.redirect_stdout(sys.stderr):
     suite = unittest.defaultTestLoader.discover(sys.argv[1])
     result = unittest.TextTestRunner(stream=sys.stderr, resultclass=Result).run(suite)
 pathlib.Path(sys.argv[3]).write_text(json.dumps({'run': result.testsRun, 'skipped': len(result.skipped),
-                  'completed': result.completed, 'success': result.wasSuccessful()}), encoding='utf-8')
+                  'completed': result.completed, 'success': result.wasSuccessful(),
+                  'skip_reasons': [str(r) for _, r in result.skipped]}), encoding='utf-8')
 sys.exit(0 if result.wasSuccessful() else 1)
 """
     with tempfile.TemporaryDirectory(prefix="kit-unit-summary-") as tmp:
@@ -139,7 +143,12 @@ sys.exit(0 if result.wasSuccessful() else 1)
     if not summary["success"] or run < 1 or completed < 1:
         raise KitError("no executed passing unit tests")
     if skipped and not policy.get("allow_skips", False):
-        raise KitError("unit tests skipped; central suite does not allow skips")
+        # A skip passes only when the central suite names its reason (e.g. an optional external CLI).
+        # Consumers can't add reasons: the allowlist lives in the central suite, not the adapter.
+        reasons = summary.get("skip_reasons", [])
+        unexplained = [r for r in reasons if not any(a in r for a in allowed_reasons)]
+        if unexplained or len(reasons) != skipped:
+            raise KitError("unit tests skipped for a reason the central suite does not allow")
     return completed
 
 

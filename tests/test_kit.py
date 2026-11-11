@@ -98,6 +98,27 @@ class KitTests(unittest.TestCase):
         (self.repo / "adapter.py").write_text("def broken(:\n")
         self.assertEqual(self.run_kit()["gate"], "failed")
 
+    def _skip_with(self, reason):
+        self.only("repository-tests")
+        (self.repo / "test_skip_extra.py").write_text(
+            "import unittest\n\nclass S(unittest.TestCase):\n"
+            f"    @unittest.skip({reason!r})\n    def test_s(self):\n        pass\n")
+
+    def test_allowlisted_skip_reason_passes(self):
+        self._skip_with("specify CLI not installed")
+        self.suite["modules"]["repository-tests"]["allowed_skip_reasons"] = ["specify CLI not installed"]
+        self.assertEqual(self.run_kit()["gate"], "passed")
+
+    def test_unlisted_skip_reason_fails(self):
+        self._skip_with("network unavailable")
+        self.suite["modules"]["repository-tests"]["allowed_skip_reasons"] = ["specify CLI not installed"]
+        self.assertEqual(self.run_kit()["gate"], "failed")
+
+    def test_adapter_cannot_add_skip_reasons(self):
+        self._skip_with("anything")
+        self.adapter["modules"]["repository-tests"]["allowed_skip_reasons"] = ["anything"]
+        self.assertEqual(self.run_kit()["gate"], "failed")
+
     def test_zero_unit_tests_fails(self):
         self.only("repository-tests")
         (self.repo / "test_adapter.py").unlink()

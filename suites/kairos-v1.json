@@ -4,7 +4,10 @@
   "modules": {
     "repository-tests": {
       "allow_skips": false,
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "allowed_skip_reasons": [
+        "specify CLI not installed"
+      ]
     },
     "telosmith": {
       "timeout_seconds": 300
