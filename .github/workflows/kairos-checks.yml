@@ -1,0 +1,56 @@
+# Reusable workflow: the one CI every Kairos repo calls. Lives only in the kit repo.
+# Consumers call it from a ~10-line workflow (examples/caller/kairos.yml) and never edit it again.
+# The job is named kairos-checks, so every repo's ruleset requires the same single check.
+name: kairos-checks
+on:
+  workflow_call:
+    inputs:
+      suite:
+        description: Central suite (profile) to run, e.g. component-v1
+        type: string
+        default: component-v1
+      adapter:
+        description: Path of the consumer's adapter file
+        type: string
+        default: .kairos/adapter.json
+      kit_ref:
+        description: Must equal the @ref in the caller's `uses:` line (a reusable workflow can't reliably read its own ref)
+        type: string
+        default: v1
+permissions:
+  contents: read            # read-only token: candidate code gets no write access
+jobs:
+  kairos-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Consumer checkout
+        uses: actions/checkout@v4
+        with: { path: repo, persist-credentials: false }
+      - name: Kit checkout (the same revision the caller pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: eraevous/Lydian
+          ref: ${{ inputs.kit_ref }}
+          path: kit
+          persist-credentials: false
+      - name: Telosmith checkout (pinned by the kit, not by consumers)
+        uses: actions/checkout@v4
+        with:
+          repository: eraevous/Telosmith
+          ref: c5ed7af92584ea3edc046c5594defdf08a3cbbb3
+          path: telosmith
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Run the central suite
+        env:
+          KAIROS_TELOSMITH_SRC: ${{ github.workspace }}/telosmith/src
+        run: |
+          python3 -I -B kit/kit/run.py --repo repo \
+            --adapter "repo/${{ inputs.adapter }}" \
+            --suite "kit/suites/${{ inputs.suite }}.json" | tee report.json
+      - name: Report in the job summary
+        if: always()
+        run: |
+          { echo '## kairos-checks'; echo '```json'; cat report.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

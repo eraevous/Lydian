@@ -1,0 +1,3 @@
+// Telosmith records. Append-only: add a new version instead of editing a line.
+{"id": "AU-owner", "version": 1, "type": "authority", "text": "zach: design intent and acceptance", "governs": ["purpose", "design", "acceptance", "code"]}
+{"id": "P0", "version": 1, "type": "purpose", "subject": "purpose", "owner": "AU-owner", "epistemic": "provisional", "text": "Lydian is the one shared test kit and CI for Kairos repositories: tests, fixtures and policies live here once, each repository calls it with a small fixed workflow and an adapter, and a change to a check applies everywhere without editing each repository.", "anchors": [{"path": "README.md", "sha256": "cecba49a5b379784927dcb53dd4338da9100092c9d3cd21de3e7d576272dc5a0", "locator": "q:What it is for", "for": "text"}]}

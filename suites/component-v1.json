@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "profile": "component-v1-demo",
+  "modules": {
+    "interoperability": {
+      "cases": [{
+        "value": {"name": "decoy", "enabled": false, "count": 0},
+        "wire": {"schema": "kit-demo@1", "payload": {"name": "decoy", "enabled": false, "count": 0}},
+        "invalid_wire": [
+          {"schema": "kit-demo@2", "payload": {}},
+          {"schema": "kit-demo@1"},
+          {"schema": "kit-demo@1", "payload": {}, "unexpected": true}
+        ]
+      }]
+    },
+    "modularity": {},
+    "repository-tests": {"allow_skips": false, "timeout_seconds": 30}
+  }
+}

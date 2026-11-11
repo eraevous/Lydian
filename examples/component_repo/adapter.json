@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "profile": "component-v1-demo",
+  "modules": {
+    "interoperability": {
+      "produce": ["{python}", "-I", "adapter.py", "produce"],
+      "consume": ["{python}", "-I", "adapter.py", "consume"]
+    },
+    "modularity": {"boundaries": [{"files": "adapter.py", "forbidden_imports": ["requests", "numpy"]}]},
+    "repository-tests": {"directory": "."}
+  }
+}
