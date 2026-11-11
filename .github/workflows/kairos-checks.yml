@@ -16,7 +16,7 @@ on:
       kit_ref:
         description: Must equal the @ref in the caller's `uses:` line (a reusable workflow can't reliably read its own ref)
         type: string
-        default: v1
+        default: main
 permissions:
   contents: read            # read-only token: candidate code gets no write access
 jobs:

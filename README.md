@@ -38,7 +38,11 @@ The shared workflow runs with a read-only token, and its checkouts keep no crede
 
 ## Versions
 
-Callers use `@v1`. A change reaches every repository on its next run, with no per-repository pull requests. Before the `v1` tag moves, the change passes Lydian's own tests and review here.
+Callers use `@main` (DEC-210). A merged change reaches every repository on its next run; there is no tag to move and no per-repository pull request.
+
+- **Trust:** callers follow mutable code. The guard is this repository's protected `main`, its own tests, and review before merge. A green check in a consumer is not proof the shared workflow is safe.
+- **Rollback:** revert the change on Lydian `main`, or pin one caller to a full commit SHA while it's fixed.
+- **Breaking changes:** if one is ever needed, it gets a new suite name (for example `kairos-v2`), so existing callers keep working.
 
 ## Status
 

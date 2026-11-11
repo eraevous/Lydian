@@ -1,6 +1,5 @@
 # The whole per-repo CI. Copy once into .github/workflows/kairos.yml; never edit per test change.
-# Pin choice (Zach decides): @v1 = kit changes reach every repo at once, no per-repo PRs;
-# @<full SHA> = each repo adopts kit changes through a small auto-PR.
+# @main (DEC-210): a merged Lydian change reaches every repo on its next run; no tag to move. Rollback: revert on Lydian main, or pin to a full SHA.
 name: kairos
 # Pushes to the default branch plus pull requests: one run per PR update, not two.
 on:
@@ -9,7 +8,7 @@ on:
   pull_request:
 jobs:
   checks:
-    uses: eraevous/Lydian/.github/workflows/kairos-checks.yml@v1
+    uses: eraevous/Lydian/.github/workflows/kairos-checks.yml@main
     with:
       suite: kairos-v1
-      kit_ref: v1   # keep equal to the @ref above
+      kit_ref: main   # keep equal to the @ref above
