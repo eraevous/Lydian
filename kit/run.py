@@ -114,6 +114,18 @@ def repository_tests(root, config, policy):
     source = within(root, config.get("source", "."))
     if not isinstance(policy.get("allow_skips", False), bool):
         raise KitError("allow_skips must be a boolean")
+    # Each allowed skip is scoped to named repositories and carries a reason. The repository
+    # identity comes from KAIROS_REPOSITORY, which the shared workflow sets from github.repository
+    # (set by Actions, not by the consumer). Unknown identity means no skip is allowed.
+    entries = policy.get("allowed_skip_reasons", [])
+    if not isinstance(entries, list) or not all(
+            isinstance(e, dict) and isinstance(e.get("reason"), str) and e["reason"]
+            and isinstance(e.get("why"), str) and e["why"]
+            and isinstance(e.get("repos"), list) and e["repos"] and all(isinstance(r, str) and r for r in e["repos"])
+            for e in entries):
+        raise KitError("allowed_skip_reasons entries need reason, why and a nonempty repos list")
+    repository = os.environ.get("KAIROS_REPOSITORY", "").lower()
+    allowed_reasons = [e["reason"] for e in entries if repository and repository in {r.lower() for r in e["repos"]}]
     program = """import contextlib, json, pathlib, sys, unittest
 sys.path.insert(0, sys.argv[2])
 class Result(unittest.TextTestResult):
@@ -125,7 +137,8 @@ with contextlib.redirect_stdout(sys.stderr):
     suite = unittest.defaultTestLoader.discover(sys.argv[1])
     result = unittest.TextTestRunner(stream=sys.stderr, resultclass=Result).run(suite)
 pathlib.Path(sys.argv[3]).write_text(json.dumps({'run': result.testsRun, 'skipped': len(result.skipped),
-                  'completed': result.completed, 'success': result.wasSuccessful()}), encoding='utf-8')
+                  'completed': result.completed, 'success': result.wasSuccessful(),
+                  'skip_reasons': [str(r) for _, r in result.skipped]}), encoding='utf-8')
 sys.exit(0 if result.wasSuccessful() else 1)
 """
     with tempfile.TemporaryDirectory(prefix="kit-unit-summary-") as tmp:
@@ -139,7 +152,12 @@ sys.exit(0 if result.wasSuccessful() else 1)
     if not summary["success"] or run < 1 or completed < 1:
         raise KitError("no executed passing unit tests")
     if skipped and not policy.get("allow_skips", False):
-        raise KitError("unit tests skipped; central suite does not allow skips")
+        # A skip passes only when the central suite names its reason (e.g. an optional external CLI).
+        # Consumers can't add reasons: the allowlist lives in the central suite, not the adapter.
+        reasons = summary.get("skip_reasons", [])
+        unexplained = [r for r in reasons if not any(a in r for a in allowed_reasons)]
+        if unexplained or len(reasons) != skipped:
+            raise KitError("unit tests skipped for a reason the central suite does not allow")
     return completed
 
 
