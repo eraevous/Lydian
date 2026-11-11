@@ -1,0 +1,11 @@
+# The whole per-repo CI. Copy once into .github/workflows/kairos.yml; never edit per test change.
+# Pin choice (Zach decides): @v1 = kit changes reach every repo at once, no per-repo PRs;
+# @<full SHA> = each repo adopts kit changes through a small auto-PR.
+name: kairos
+on: [push, pull_request]
+jobs:
+  checks:
+    uses: eraevous/Lydian/.github/workflows/kairos-checks.yml@v1
+    with:
+      suite: kairos-v1
+      kit_ref: v1   # keep equal to the @ref above

@@ -1,0 +1,26 @@
+# Lydian's own CI: the kit's tests, including the Telosmith module against a pinned Telosmith.
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/checkout@v4
+        with:
+          repository: eraevous/Telosmith
+          ref: c5ed7af92584ea3edc046c5594defdf08a3cbbb3
+          path: _telosmith
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - name: Kit tests
+        env:
+          KAIROS_TELOSMITH_SRC: ${{ github.workspace }}/_telosmith/src
+        run: python3 -I -B -m unittest discover -s tests -v
