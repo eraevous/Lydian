@@ -23,6 +23,25 @@ class ProductionSuiteTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/kairos-checks.yml").read_text()
         step = workflow.split("- name: Run the central suite", 1)[1].split("- name:", 1)[0]
         self.assertRegex(step, r"\n\s+shell: bash\b")
+        # A duplicated key makes the workflow invalid YAML for Actions.
+        self.assertEqual(step.count("shell:"), 1)
+
+
+    def test_production_example_passes_end_to_end(self):
+        import importlib.util, os, shutil, tempfile
+        src = os.environ.get("KAIROS_TELOSMITH_SRC", "")
+        if not src:
+            self.skipTest("set KAIROS_TELOSMITH_SRC")
+        spec = importlib.util.spec_from_file_location("kit_run_p", ROOT / "kit/run.py")
+        kit = importlib.util.module_from_spec(spec); spec.loader.exec_module(kit)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            shutil.copytree(ROOT / "examples/consumer_repo", repo)
+            adapter = json.loads((repo / ".kairos/adapter.json").read_text())
+            suite = json.loads((ROOT / "suites/kairos-v1.json").read_text())
+            report = kit.evaluate(repo, adapter, suite)
+            self.assertEqual(report["gate"], "passed", report)
+            self.assertEqual([m["module"] for m in report["modules"]], ["repository-tests", "telosmith"])
 
 
 if __name__ == "__main__":

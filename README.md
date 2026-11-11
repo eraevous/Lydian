@@ -30,7 +30,7 @@ Every check has a case it must flag and a clean decoy it must not (see `tests/`)
 ## How a repository uses it
 
 1. Copy `examples/caller/kairos.yml` to `.github/workflows/kairos.yml`.
-2. Add `.kairos/adapter.json` (see `examples/component_repo/adapter.json`).
+2. Add `.kairos/adapter.json` (copy `examples/consumer_repo/.kairos/adapter.json`, profile `kairos-v1`), and keep at least one record in `.aec/records.jsonl`.
 3. Require the single check `checks / kairos-checks` in the repository's ruleset.
 
 The shared workflow runs with a read-only token, and its checkouts keep no credentials.

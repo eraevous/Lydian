@@ -46,6 +46,12 @@ class TelosmithModuleTests(unittest.TestCase):
         self.assertEqual(report["gate"], "failed")
         self.assertIn("no Telosmith records", report["modules"][0]["reason"])
 
+    def test_empty_or_comment_only_records_fail(self):
+        (self.repo / ".aec/records.jsonl").write_text("// header comment only\n\n")
+        report = self.gate()
+        self.assertEqual(report["gate"], "failed")
+        self.assertIn("no records", report["modules"][0]["reason"])
+
     def test_missing_telosmith_source_fails_closed(self):
         old = os.environ.pop("KAIROS_TELOSMITH_SRC")
         self.addCleanup(os.environ.__setitem__, "KAIROS_TELOSMITH_SRC", old)

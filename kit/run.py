@@ -168,7 +168,11 @@ def telosmith(root, config, policy):
                           timeout=policy.get("timeout_seconds", 120))
     if checked.returncode:
         raise KitError("Telosmith records check reported errors")
-    return sum(1 for line in records.read_text(encoding="utf-8").splitlines() if line.strip())
+    count = sum(1 for line in records.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.lstrip().startswith("//"))
+    if count < 1:
+        raise KitError("Telosmith records file has no records")
+    return count
 
 
 MODULES = {"interoperability": interoperability, "modularity": modularity,
