@@ -6,9 +6,9 @@ on:
   workflow_call:
     inputs:
       suite:
-        description: Central suite (profile) to run, e.g. component-v1
+        description: Central suite (profile) to run, e.g. kairos-v1
         type: string
-        default: component-v1
+        default: kairos-v1
       adapter:
         description: Path of the consumer's adapter file
         type: string
@@ -44,6 +44,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - name: Run the central suite
+        shell: bash   # bash -eo pipefail: a failing kit run must fail the step even though tee succeeds
         env:
           KAIROS_TELOSMITH_SRC: ${{ github.workspace }}/telosmith/src
         run: |

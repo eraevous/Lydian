@@ -11,6 +11,11 @@ Kairos has many repositories. Without a shared kit, adding, removing or fixing a
 - a ~10-line workflow that calls Lydian's (`examples/caller/kairos.yml`), which never changes when tests change;
 - a small adapter file (`.kairos/adapter.json`) that says how that repository differs: paths, its own test folder, which checks apply.
 
+## Suites
+
+- `kairos-v1` (default, what repositories run): `repository-tests` and `telosmith`.
+- `component-v1`: a demo profile that exercises all four modules against `examples/component_repo`.
+
 ## Checks (modules)
 
 | Module | What it checks |

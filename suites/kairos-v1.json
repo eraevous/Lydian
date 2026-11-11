@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "profile": "kairos-v1",
+  "modules": {
+    "repository-tests": {
+      "allow_skips": false,
+      "timeout_seconds": 600
+    },
+    "telosmith": {
+      "timeout_seconds": 300
+    }
+  }
+}

@@ -7,5 +7,5 @@ jobs:
   checks:
     uses: eraevous/Lydian/.github/workflows/kairos-checks.yml@v1
     with:
-      suite: component-v1
+      suite: kairos-v1
       kit_ref: v1   # keep equal to the @ref above
