@@ -2,7 +2,11 @@
 # Pin choice (Zach decides): @v1 = kit changes reach every repo at once, no per-repo PRs;
 # @<full SHA> = each repo adopts kit changes through a small auto-PR.
 name: kairos
-on: [push, pull_request]
+# Pushes to the default branch plus pull requests: one run per PR update, not two.
+on:
+  push:
+    branches: [main]
+  pull_request:
 jobs:
   checks:
     uses: eraevous/Lydian/.github/workflows/kairos-checks.yml@v1

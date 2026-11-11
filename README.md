@@ -14,6 +14,7 @@ Kairos has many repositories. Without a shared kit, adding, removing or fixing a
 ## Suites
 
 - `kairos-v1` (default, what repositories run): `repository-tests` and `telosmith`.
+- `kairos-records-v1`: `telosmith` only, for repositories with no unittest suite Lydian can run yet (no Python tests, or pytest/third-party dependencies). Their own CI keeps running their tests.
 - `component-v1`: a demo profile that exercises all four modules against `examples/component_repo`.
 
 ## Checks (modules)
