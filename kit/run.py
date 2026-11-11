@@ -114,9 +114,18 @@ def repository_tests(root, config, policy):
     source = within(root, config.get("source", "."))
     if not isinstance(policy.get("allow_skips", False), bool):
         raise KitError("allow_skips must be a boolean")
-    allowed_reasons = policy.get("allowed_skip_reasons", [])
-    if not isinstance(allowed_reasons, list) or not all(isinstance(x, str) and x for x in allowed_reasons):
-        raise KitError("allowed_skip_reasons must be a list of nonempty strings")
+    # Each allowed skip is scoped to named repositories and carries a reason. The repository
+    # identity comes from KAIROS_REPOSITORY, which the shared workflow sets from github.repository
+    # (set by Actions, not by the consumer). Unknown identity means no skip is allowed.
+    entries = policy.get("allowed_skip_reasons", [])
+    if not isinstance(entries, list) or not all(
+            isinstance(e, dict) and isinstance(e.get("reason"), str) and e["reason"]
+            and isinstance(e.get("why"), str) and e["why"]
+            and isinstance(e.get("repos"), list) and e["repos"] and all(isinstance(r, str) and r for r in e["repos"])
+            for e in entries):
+        raise KitError("allowed_skip_reasons entries need reason, why and a nonempty repos list")
+    repository = os.environ.get("KAIROS_REPOSITORY", "").lower()
+    allowed_reasons = [e["reason"] for e in entries if repository and repository in {r.lower() for r in e["repos"]}]
     program = """import contextlib, json, pathlib, sys, unittest
 sys.path.insert(0, sys.argv[2])
 class Result(unittest.TextTestResult):

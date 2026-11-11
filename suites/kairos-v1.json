@@ -6,10 +6,34 @@
       "allow_skips": false,
       "timeout_seconds": 600,
       "allowed_skip_reasons": [
-        "specify CLI not installed",
-        "KB database not present",
-        "KB database not installed",
-        "KB release predates"
+        {
+          "reason": "specify CLI not installed",
+          "repos": [
+            "eraevous/Telosmith"
+          ],
+          "why": "Optional Spec Kit integration test needs the external specify CLI, which CI does not install."
+        },
+        {
+          "reason": "KB database not present",
+          "repos": [
+            "eraevous/MtG"
+          ],
+          "why": "KB-backed tests need the KB release downloaded per data/README.md; CI does not download it. MtG's own CI covers the rest."
+        },
+        {
+          "reason": "KB database not installed",
+          "repos": [
+            "eraevous/MtG"
+          ],
+          "why": "Same as above (older message wording in the same test file)."
+        },
+        {
+          "reason": "KB release predates",
+          "repos": [
+            "eraevous/MtG"
+          ],
+          "why": "Version guard for a KB-backed test (C-024); only reachable when a KB is present."
+        }
       ]
     },
     "telosmith": {

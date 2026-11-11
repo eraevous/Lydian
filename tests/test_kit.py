@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -104,19 +105,54 @@ class KitTests(unittest.TestCase):
             "import unittest\n\nclass S(unittest.TestCase):\n"
             f"    @unittest.skip({reason!r})\n    def test_s(self):\n        pass\n")
 
-    def test_allowlisted_skip_reason_passes(self):
+    def _allow(self, reason, repos):
+        self.suite["modules"]["repository-tests"]["allowed_skip_reasons"] = [
+            {"reason": reason, "repos": repos, "why": "test"}]
+
+    def _as_repo(self, name):
+        old = os.environ.get("KAIROS_REPOSITORY")
+        if name is None:
+            os.environ.pop("KAIROS_REPOSITORY", None)
+        else:
+            os.environ["KAIROS_REPOSITORY"] = name
+        self.addCleanup(lambda: os.environ.pop("KAIROS_REPOSITORY", None) if old is None
+                        else os.environ.__setitem__("KAIROS_REPOSITORY", old))
+
+    def test_scoped_skip_reason_passes_for_named_repo(self):
         self._skip_with("specify CLI not installed")
-        self.suite["modules"]["repository-tests"]["allowed_skip_reasons"] = ["specify CLI not installed"]
+        self._allow("specify CLI not installed", ["eraevous/Telosmith"])
+        self._as_repo("eraevous/telosmith")
         self.assertEqual(self.run_kit()["gate"], "passed")
+
+    def test_scoped_skip_reason_fails_for_other_repo(self):
+        self._skip_with("specify CLI not installed")
+        self._allow("specify CLI not installed", ["eraevous/Telosmith"])
+        self._as_repo("eraevous/MtG")
+        self.assertEqual(self.run_kit()["gate"], "failed")
+
+    def test_skip_fails_when_repository_unknown(self):
+        self._skip_with("specify CLI not installed")
+        self._allow("specify CLI not installed", ["eraevous/Telosmith"])
+        self._as_repo(None)
+        self.assertEqual(self.run_kit()["gate"], "failed")
 
     def test_unlisted_skip_reason_fails(self):
         self._skip_with("network unavailable")
-        self.suite["modules"]["repository-tests"]["allowed_skip_reasons"] = ["specify CLI not installed"]
+        self._allow("specify CLI not installed", ["eraevous/Telosmith"])
+        self._as_repo("eraevous/Telosmith")
         self.assertEqual(self.run_kit()["gate"], "failed")
 
     def test_adapter_cannot_add_skip_reasons(self):
         self._skip_with("anything")
-        self.adapter["modules"]["repository-tests"]["allowed_skip_reasons"] = ["anything"]
+        self._as_repo("eraevous/Telosmith")
+        self.adapter["modules"]["repository-tests"]["allowed_skip_reasons"] = [
+            {"reason": "anything", "repos": ["eraevous/Telosmith"], "why": "x"}]
+        self.assertEqual(self.run_kit()["gate"], "failed")
+
+    def test_unscoped_entry_is_rejected(self):
+        self._skip_with("specify CLI not installed")
+        self.suite["modules"]["repository-tests"]["allowed_skip_reasons"] = ["specify CLI not installed"]
+        self._as_repo("eraevous/Telosmith")
         self.assertEqual(self.run_kit()["gate"], "failed")
 
     def test_zero_unit_tests_fails(self):
