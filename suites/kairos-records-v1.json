@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "profile": "kairos-records-v1",
+  "modules": {
+    "telosmith": {"timeout_seconds": 300}
+  }
+}
