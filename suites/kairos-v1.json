@@ -6,7 +6,10 @@
       "allow_skips": false,
       "timeout_seconds": 600,
       "allowed_skip_reasons": [
-        "specify CLI not installed"
+        "specify CLI not installed",
+        "KB database not present",
+        "KB database not installed",
+        "KB release predates"
       ]
     },
     "telosmith": {
