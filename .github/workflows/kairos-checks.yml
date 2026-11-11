@@ -47,6 +47,7 @@ jobs:
         shell: bash   # bash -eo pipefail: a failing kit run must fail the step even though tee succeeds
         env:
           KAIROS_TELOSMITH_SRC: ${{ github.workspace }}/telosmith/src
+        shell: bash
         run: |
           python3 -I -B kit/kit/run.py --repo repo \
             --adapter "repo/${{ inputs.adapter }}" \
