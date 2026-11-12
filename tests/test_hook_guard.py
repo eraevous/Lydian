@@ -178,6 +178,21 @@ class HookGuard(unittest.TestCase):
                 self.assertEqual(r["gate"], "failed", r)
                 self.assertRegex(r["modules"][0]["reason"], "variant|outside")
 
+    def test_symlinked_guarded_paths_fail(self):
+        # Codex on #7: .claude -> config hid an unapproved settings.local.json from the walk.
+        (self.repo / "config").mkdir()
+        (self.repo / "config" / "settings.local.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [{"command": OTHER}]}]}}))
+        (self.repo / ".claude").symlink_to("config", target_is_directory=True)
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "failed", r)
+        self.assertIn("symlink", r["modules"][0]["reason"])
+        (self.repo / ".claude").unlink(); (self.repo / ".claude").mkdir()
+        (self.repo / ".claude" / "settings.json").symlink_to(self.repo / "config" / "settings.local.json")
+        self.assertEqual(self.run_guard()["gate"], "failed")
+        (self.repo / ".claude" / "settings.json").unlink()
+        (self.repo / ".mcp.json").symlink_to(self.repo / "config" / "settings.local.json")
+        self.assertEqual(self.run_guard()["gate"], "failed")
+
     def test_root_skills_and_commands_beside_settings_are_fine(self):
         self.settings(GOOD)
         (self.repo / ".claude" / "skills" / "x").mkdir(parents=True)

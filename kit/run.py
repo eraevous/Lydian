@@ -262,6 +262,11 @@ def hook_guard(root, config, policy):
         return name.rstrip(". ").casefold()
 
     settings_names = {"settings.json", "settings.local.json"}
+    # No symlinks on guarded paths (Codex on #7): a symlinked root .claude points the walk below
+    # at a folder whose name isn't checked, and a symlinked settings file can change under the check.
+    for rel in (".claude", ".claude/settings.json", ".claude/settings.local.json", ".mcp.json"):
+        if (root / rel).is_symlink():
+            raise KitError("a guarded agent-settings path is a symlink")
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != ".git"]
         here = Path(dirpath)
