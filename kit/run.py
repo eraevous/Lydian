@@ -248,7 +248,9 @@ def hook_guard(root, config, policy):
     for stem in policy.get("forbidden_root_modules", []):
         importable = re.compile(rf"{re.escape(stem)}(\.[^.]+)*\.(py|pyc|pyo|pyw|so|pyd|dylib)", re.I)
         for name in names:
-            if name == stem or importable.fullmatch(name):
+            # Case-insensitive like the regex: AEC/ and Aec/ import as aec on case-insensitive filesystems
+            # (Abigail's probe of 0743ae2: a bare AEC/__init__.py package passed).
+            if name.rstrip(". ").casefold() == stem.casefold() or importable.fullmatch(name.rstrip(". ")):
                 raise KitError(f"repository root has {name!r}, which could shadow a module an agent hook imports")
         checked += 1
     extras = set(allowed_extras.get("*", []))
@@ -260,8 +262,9 @@ def hook_guard(root, config, policy):
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
     # Aliases of the guarded paths (Codex security review on #7). Case-insensitive filesystems (macOS,
-    # Windows) treat `.CLAUDE/settings.local.json` or `.MCP.json` as the real file; Windows also drops
-    # trailing dots and spaces. A session started in a subfolder reads that subfolder's `.claude/` and
+    # Windows) treat `.CLAUDE/settings.local.json` or `.MCP.json` as the real file. Win32 path
+    # normalization drops trailing dots and spaces, so `.claude.` may name `.claude` there; that is
+    # handled here by string normalization only and has not been demonstrated on a Windows checkout. A session started in a subfolder reads that subfolder's `.claude/` and
     # `.mcp.json`. So: any spelling of a guarded path other than the exact root one fails, anywhere.
     def norm(name):
         return name.rstrip(". ").casefold()
@@ -405,7 +408,16 @@ def evaluate(root, adapter, suite):
     # runs repository-controlled code, which could otherwise delete what it looks for
     # (Codex P1 and Copilot on Lydian#7). Other modules keep their declared order.
     ordered = sorted(definitions.items(), key=lambda kv: not (isinstance(kv[1], dict) and kv[1].get("run_first") is True))
+    # A run_first module is a security preflight: if it doesn't pass, nothing after it runs.
+    # The checkout it rejected must never reach repository-controlled code (Abigail's probe of
+    # 0743ae2: hook-guard failed and repository-tests still ran). Later modules are reported as
+    # not-run, with the preflight named, so the report shows why.
+    preflight_failed = None
     for name, policy in ordered:
+        if preflight_failed:
+            results.append({"module": name, "status": "not-run", "cases": 0,
+                            "reason": f"not run: security preflight {preflight_failed!r} did not pass"})
+            continue
         result = {"module": name, "status": "failed", "cases": 0}
         try:
             if name not in MODULES:
@@ -427,6 +439,8 @@ def evaluate(root, adapter, suite):
         except (KitError, KeyError, ValueError, TypeError, SyntaxError, OSError) as exc:
             # Do not echo source snippets, process output, or secrets into a shared report.
             result["reason"] = str(exc) if isinstance(exc, KitError) else type(exc).__name__
+        if isinstance(policy, dict) and policy.get("run_first") is True and result["status"] != "passed":
+            preflight_failed = name
         results.append(result)
     return {"schema": "kairos-testkit/result@1", "kit_version": VERSION,
             "suite": suite["profile"], "scope": "local-prototype",

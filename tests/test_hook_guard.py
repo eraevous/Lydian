@@ -208,6 +208,73 @@ class HookGuard(unittest.TestCase):
         (self.repo / ".claude" / "skills" / "x" / "SKILL.md").write_text("# x\n")
         self.assertEqual(self.run_guard()["gate"], "passed")
 
+    def test_package_folder_match_is_case_insensitive(self):
+        # Abigail's probe of 0743ae2: a bare AEC/__init__.py package passed the guard.
+        for folder in ("aec", "AEC", "Aec", "aEc", "aec.", "AEC. "):
+            with self.subTest(folder=folder):
+                tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+                self.repo = Path(tmp.name)
+                (self.repo / folder).mkdir()
+                (self.repo / folder / "__init__.py").write_text("")
+                r = self.run_guard()
+                self.assertEqual(r["gate"], "failed", r)
+                self.assertIn(folder, r["modules"][0]["reason"])
+        for harmless in ("aecx", "my_aec", "AEC.md", "docs"):
+            with self.subTest(harmless=harmless):
+                tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+                self.repo = Path(tmp.name)
+                (self.repo / harmless).mkdir() if "." not in harmless else (self.repo / harmless).write_text("x")
+                self.assertEqual(self.run_guard()["gate"], "passed")
+
+    def suite_with_tests_after_guard(self, marker):
+        (self.repo / "tests").mkdir(exist_ok=True)
+        (self.repo / "tests" / "test_marker.py").write_text(
+            "import pathlib, unittest\n"
+            "class T(unittest.TestCase):\n"
+            f"    def test_touch(self):\n        pathlib.Path({str(marker)!r}).write_text('ran')\n")
+        self.policy["run_first"] = True
+        suite = {"schema": 1, "profile": "p", "modules": {
+            "repository-tests": {"allow_skips": False},
+            "hook-guard": self.policy}}
+        adapter = {"schema": 1, "profile": "p", "modules": {"repository-tests": {"directory": "tests"}}}
+        return suite, adapter
+
+    def evaluate(self, suite, adapter):
+        with mock.patch.dict(os.environ, {"KAIROS_REPOSITORY": "eraevous/anything"}):
+            return kit.evaluate(self.repo, adapter, suite)
+
+    def test_failed_preflight_runs_no_repository_code(self):
+        # Abigail's probe of 0743ae2: hook-guard failed, yet repository-tests still executed.
+        marker = Path(tempfile.mkdtemp()) / "ran"
+        self.addCleanup(lambda: marker.exists() and marker.unlink())
+        suite, adapter = self.suite_with_tests_after_guard(marker)
+        (self.repo / "aec").mkdir()
+        r = self.evaluate(suite, adapter)
+        self.assertEqual(r["gate"], "failed")
+        self.assertFalse(marker.exists(), "repository tests ran after the preflight failed")
+        status = {m["module"]: m for m in r["modules"]}
+        self.assertEqual(status["hook-guard"]["status"], "failed")
+        self.assertEqual(status["repository-tests"]["status"], "not-run")
+        self.assertIn("hook-guard", status["repository-tests"]["reason"])
+
+    def test_passing_preflight_lets_later_modules_run(self):
+        marker = Path(tempfile.mkdtemp()) / "ran"
+        self.addCleanup(lambda: marker.exists() and marker.unlink())
+        suite, adapter = self.suite_with_tests_after_guard(marker)
+        r = self.evaluate(suite, adapter)
+        self.assertEqual(r["gate"], "passed", r)
+        self.assertTrue(marker.exists())
+
+    def test_malformed_guard_config_blocks_later_modules(self):
+        marker = Path(tempfile.mkdtemp()) / "ran"
+        self.addCleanup(lambda: marker.exists() and marker.unlink())
+        suite, adapter = self.suite_with_tests_after_guard(marker)
+        suite["modules"]["hook-guard"]["allowed_hook_commands_sha256"] = ["not", "an", "object"]
+        r = self.evaluate(suite, adapter)
+        self.assertEqual(r["gate"], "failed")
+        self.assertFalse(marker.exists())
+        self.assertEqual({m["module"]: m["status"] for m in r["modules"]}["repository-tests"], "not-run")
+
     def test_production_suites_carry_the_guard_for_every_kairos_repo(self):
         for name in ("kairos-v1", "kairos-records-v1"):
             policy = json.loads((ROOT / "suites" / f"{name}.json").read_text())["modules"]["hook-guard"]
