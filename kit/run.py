@@ -37,7 +37,7 @@ def within(root, value):
     return path
 
 
-def command(root, argv, input_text="", timeout=30):
+def command(root, argv, input_text="", timeout=30, discard_output=False):
     if not isinstance(argv, list) or not argv or not all(isinstance(x, str) and x for x in argv):
         raise KitError("command must be a nonempty argv array")
     argv = [sys.executable if x == "{python}" else x for x in argv]
@@ -46,6 +46,12 @@ def command(root, argv, input_text="", timeout=30):
     env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "WINDIR", "TMPDIR", "TEMP", "TMP") if key in os.environ}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     try:
+        if discard_output:
+            # Only the exit code matters: unread output can't fail the run (undecodable bytes)
+            # or fill memory (a long suite's log).
+            return subprocess.run(argv, cwd=root, env=env, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  timeout=timeout, check=False)
         return subprocess.run(argv, cwd=root, env=env, input=input_text, text=True,
                               capture_output=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -161,6 +167,51 @@ sys.exit(0 if result.wasSuccessful() else 1)
     return completed
 
 
+def repository_commands(root, config, policy):
+    """Run the repository's own declared test commands: suites unittest discovery can't see.
+
+    Why: some repos keep their main suite outside unittest (relay-kit's 349-case
+    tests/run_tests.py, its node browser tests, a prepublish scan). Before this module the
+    required kairos-checks passed without running them (Zach, 2026-11-12: "RK seems not to be
+    running the Kairos checks correctly").
+
+    Adapter: {"commands": [{"name": "regression", "argv": ["{python}", "-I", "-B", "tests/run_tests.py"]}]}
+    Central policy (the suite, not the consumer, decides):
+      - allowed_programs: the first argv element must be one of these ("{python}" is this Python);
+      - timeout_seconds: per command;
+      - optional: if true, a repo that declares no commands is reported as not-declared, not failed.
+    Each command passes on exit 0. Output is never copied into the report (it may hold secrets);
+    the failing command's name is. Trust note: the repo chooses its commands, exactly as it
+    already chooses its unit tests; the kit guarantees they ran, not that they are thorough.
+    """
+    commands = config.get("commands")
+    if not isinstance(commands, list) or not commands:
+        raise KitError("repository-commands needs a nonempty commands list")
+    allowed = policy.get("allowed_programs", ["{python}"])
+    if not isinstance(allowed, list) or not all(isinstance(a, str) and a for a in allowed):
+        raise KitError("allowed_programs must be a list of program names")
+    names = set()
+    for entry in commands:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not entry["name"]:
+            raise KitError("each command needs a name")
+        if entry["name"] in names:
+            raise KitError("command names must be unique")
+        names.add(entry["name"])
+        argv = entry.get("argv")
+        if not isinstance(argv, list) or not argv or argv[0] not in allowed:
+            raise KitError(f"command {entry['name']!r}: program not allowed by the central suite")
+    for entry in commands:
+        try:
+            result = command(root, entry["argv"], timeout=policy.get("timeout_seconds", 600), discard_output=True)
+        except KitError as exc:
+            # Timeout or can't start: name the command (never its argv or output) so a
+            # multi-command adapter shows which suite broke (Copilot on Lydian#6).
+            raise KitError(f"command {entry['name']!r} {exc}") from exc
+        if result.returncode:
+            raise KitError(f"command {entry['name']!r} failed (exit {result.returncode}; output not copied)")
+    return len(commands)
+
+
 def telosmith(root, config, policy):
     """Run Telosmith's structural records check from the kit, so no repo copies CI snippets.
 
@@ -194,7 +245,8 @@ def telosmith(root, config, policy):
 
 
 MODULES = {"interoperability": interoperability, "modularity": modularity,
-           "repository-tests": repository_tests, "telosmith": telosmith}
+           "repository-tests": repository_tests, "repository-commands": repository_commands,
+           "telosmith": telosmith}
 
 
 def evaluate(root, adapter, suite):
@@ -222,6 +274,10 @@ def evaluate(root, adapter, suite):
             if name not in MODULES:
                 result["status"] = "blocked"
                 raise KitError("central suite names an unknown module")
+            if name not in config and isinstance(policy, dict) and policy.get("optional") is True:
+                result["status"] = "not-declared"
+                results.append(result)
+                continue
             if name not in config:
                 result["status"] = "blocked"
                 raise KitError("required module lacks an adapter")
@@ -237,7 +293,8 @@ def evaluate(root, adapter, suite):
             "suite": suite["profile"], "scope": "local-prototype",
             "suite_sha256": hashlib.sha256(json.dumps(suite, sort_keys=True).encode()).hexdigest(),
             "adapter_sha256": hashlib.sha256(json.dumps(adapter, sort_keys=True).encode()).hexdigest(),
-            "gate": "passed" if all(r["status"] == "passed" for r in results) else "failed",
+            "gate": "passed" if results and any(r["status"] == "passed" for r in results)
+                    and all(r["status"] in ("passed", "not-declared") for r in results) else "failed",
             "modules": results}
 
 
