@@ -41,7 +41,9 @@ class ProductionSuiteTests(unittest.TestCase):
             suite = json.loads((ROOT / "suites/kairos-v1.json").read_text())
             report = kit.evaluate(repo, adapter, suite)
             self.assertEqual(report["gate"], "passed", report)
-            self.assertEqual([m["module"] for m in report["modules"]], ["repository-tests", "telosmith"])
+            self.assertEqual({m["module"]: m["status"] for m in report["modules"]},
+                             {"repository-tests": "passed", "telosmith": "passed",
+                              "repository-commands": "not-declared"})
 
 
 if __name__ == "__main__":
