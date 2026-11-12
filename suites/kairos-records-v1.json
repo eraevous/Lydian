@@ -12,6 +12,69 @@
         "{python}",
         "node"
       ]
+    },
+    "hook-guard": {
+      "adapter_optional": true,
+      "why": "Hook commands in a repository's .claude settings run on the machine of anyone who opens an agent session there. A branch can change them; this check holds them to fingerprints kept here, so a changed hook fails CI until the owner adds its fingerprint centrally (Zach, 2026-11-12).",
+      "allowed_hook_commands_sha256": {
+        "eraevous/Anamnesis": [
+          "3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc"
+        ],
+        "eraevous/Cognitive-Scaffolding": [
+          "3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc"
+        ],
+        "eraevous/Fathom": [
+          "3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc"
+        ],
+        "eraevous/Lydian": [
+          "730cf38ec88c5d00f17169cdc9a2bcbf4124796c30009cb164560d9d94bf8ce1"
+        ],
+        "eraevous/MtG": [
+          "c044525e192a71af29609b04621141db6b9464fe896effc892895c6f3b9d51ca",
+          "4cbb60d6769c3fe9fcee5257e8ba6cea1c478e3347efdb871c2c82b5df7dc43a"
+        ],
+        "eraevous/Prospero": [
+          "82f599dd35aa1a20f6ee0150f30c4b512cf5f1dc064ec217243e70c22d3040e5"
+        ],
+        "eraevous/QAT-Kits": [
+          "3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc"
+        ],
+        "eraevous/Telosmith": [
+          "c1b556106e40066c153423a0761a11313c0af0ab1a8d0ff1b0cce7c57d42a7fb"
+        ],
+        "eraevous/Today": [
+          "3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc"
+        ],
+        "eraevous/crank-mem-eval": [
+          "5bd1822b388c63f2cedbda2118d17cbaf4574feddacf8dd04376263a5e639e29"
+        ],
+        "eraevous/kairos-cockpit": [
+          "82f599dd35aa1a20f6ee0150f30c4b512cf5f1dc064ec217243e70c22d3040e5"
+        ],
+        "eraevous/kairos-infra": [
+          "3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc"
+        ],
+        "eraevous/relay-kit": [
+          "156000374eb0eae620f749746bcbfbf2aab779de42b43ffe73879c796c657874"
+        ],
+        "*": [
+          "5bd1822b388c63f2cedbda2118d17cbaf4574feddacf8dd04376263a5e639e29"
+        ]
+      },
+      "forbidden_root_names": [
+        "aec",
+        "aec.py",
+        "runpy.py",
+        "site.py",
+        "sitecustomize.py",
+        "usercustomize.py",
+        "encodings",
+        "encodings.py",
+        "codecs.py",
+        "os.py",
+        "io.py",
+        "abc.py"
+      ]
     }
   }
 }

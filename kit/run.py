@@ -212,6 +212,62 @@ def repository_commands(root, config, policy):
     return len(commands)
 
 
+def hook_guard(root, config, policy):
+    """Hold a repository's agent hooks to fingerprints kept centrally (Zach, 2026-11-12).
+
+    Why: a hook command in `.claude/settings.json` (or a committed `settings.local.json`) runs
+    automatically on the machine of anyone who opens an agent session in that checkout. A branch
+    can change it. This check runs from Lydian, not from the branch: every hook command must match
+    a SHA-256 fingerprint listed for that repository (or for every repository, under "*") in the
+    central suite. A new or changed hook fails until the owner adds its fingerprint here.
+    It also fails if the repository root holds a file or folder that would shadow a module a hook
+    imports (aec, runpy, site, ...), the trick behind Telosmith#77.
+
+    What it can't do: vet code a hook legitimately runs from the checkout (for example a repo's
+    own drift script), and it can't stop a pull request that rewrites the workflow calling it.
+    Owner review of `.github/` and `.claude/` changes covers those. No adapter needed.
+    """
+    allowed_map = policy.get("allowed_hook_commands_sha256", {})
+    if not isinstance(allowed_map, dict):
+        raise KitError("allowed_hook_commands_sha256 must be an object")
+    repository = os.environ.get("KAIROS_REPOSITORY", "").lower()
+    allowed = set(allowed_map.get("*", []))
+    for repo, hashes in allowed_map.items():
+        if repo != "*" and repo.lower() == repository:
+            allowed |= set(hashes)
+    checked = 0
+    for name in policy.get("forbidden_root_names", []):
+        if (root / name).exists() or (root / name).is_symlink():
+            raise KitError(f"repository root has {name!r}, which could shadow a module an agent hook imports")
+        checked += 1
+    for rel in (".claude/settings.json", ".claude/settings.local.json"):
+        path = within(root, rel)
+        if not path.is_file():
+            continue
+        try:
+            settings = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            raise KitError(f"{rel} is not valid JSON")
+        hooks = settings.get("hooks", {}) if isinstance(settings, dict) else {}
+        if not isinstance(hooks, dict):
+            raise KitError(f"{rel}: hooks must be an object")
+        for event, matchers in hooks.items():
+            for matcher in matchers if isinstance(matchers, list) else [None]:
+                entries = matcher.get("hooks") if isinstance(matcher, dict) else None
+                if not isinstance(entries, list):
+                    raise KitError(f"{rel}: {event} hook entry has an unexpected shape")
+                for entry in entries:
+                    cmd = entry.get("command") if isinstance(entry, dict) else None
+                    if not isinstance(cmd, str):
+                        raise KitError(f"{rel}: {event} hook without a command string")
+                    digest = hashlib.sha256(cmd.encode("utf-8")).hexdigest()
+                    if digest not in allowed:
+                        raise KitError(f"{rel}: {event} hook {digest[:12]} is not on the central allowlist "
+                                       f"(a changed or new hook; the owner adds its fingerprint in Lydian)")
+                    checked += 1
+    return checked
+
+
 def telosmith(root, config, policy):
     """Run Telosmith's structural records check from the kit, so no repo copies CI snippets.
 
@@ -246,7 +302,7 @@ def telosmith(root, config, policy):
 
 MODULES = {"interoperability": interoperability, "modularity": modularity,
            "repository-tests": repository_tests, "repository-commands": repository_commands,
-           "telosmith": telosmith}
+           "hook-guard": hook_guard, "telosmith": telosmith}
 
 
 def evaluate(root, adapter, suite):
@@ -278,6 +334,8 @@ def evaluate(root, adapter, suite):
                 result["status"] = "not-declared"
                 results.append(result)
                 continue
+            if name not in config and isinstance(policy, dict) and policy.get("adapter_optional") is True:
+                config = dict(config, **{name: {}})
             if name not in config:
                 result["status"] = "blocked"
                 raise KitError("required module lacks an adapter")
