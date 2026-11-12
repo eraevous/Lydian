@@ -254,6 +254,31 @@ def hook_guard(root, config, policy):
     def canonical(value):
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
+    # Aliases of the guarded paths (Codex security review on #7). Case-insensitive filesystems (macOS,
+    # Windows) treat `.CLAUDE/settings.local.json` or `.MCP.json` as the real file; Windows also drops
+    # trailing dots and spaces. A session started in a subfolder reads that subfolder's `.claude/` and
+    # `.mcp.json`. So: any spelling of a guarded path other than the exact root one fails, anywhere.
+    def norm(name):
+        return name.rstrip(". ").casefold()
+
+    settings_names = {"settings.json", "settings.local.json"}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        here = Path(dirpath)
+        at_root = here == root
+        for d in dirnames:
+            if norm(d) == ".claude" and not (at_root and d == ".claude"):
+                if any(norm(f.name) in settings_names for f in (here / d).iterdir()):
+                    raise KitError("repository has agent settings outside the root .claude folder "
+                                   "(a case variant, a trailing dot or space, or a subfolder)")
+        if norm(here.name) == ".claude" and here.parent == root and here.name == ".claude":
+            for f in filenames:
+                if norm(f) in settings_names and f not in settings_names:
+                    raise KitError("repository has a case or trailing-character variant of an agent-settings file")
+        for f in filenames:
+            if norm(f) == ".mcp.json" and not (at_root and f == ".mcp.json"):
+                raise KitError("repository has an MCP config outside the exact root .mcp.json")
+
     # An MCP config starts programs too (Copilot on #7: anything that changes what runs counts).
     mcp = within(root, ".mcp.json")
     if mcp.is_file():

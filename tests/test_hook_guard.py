@@ -164,6 +164,26 @@ class HookGuard(unittest.TestCase):
         (self.repo / ".mcp.json").write_text(json.dumps({"mcpServers": {"x": {"command": "sh"}}}))
         self.assertEqual(self.run_guard()["gate"], "failed")
 
+    def test_case_variant_settings_paths_fail(self):
+        # Codex security review on #7: macOS treats .CLAUDE/settings.local.json as the real file.
+        for parts in ((".CLAUDE", "settings.local.json"), (".claude", "Settings.json"), (".Mcp.json",),
+                      (".claude.", "settings.json"), ("sub", ".claude", "settings.json"), ("sub", ".mcp.json")):
+            with self.subTest(parts=parts):
+                tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+                self.repo = Path(tmp.name)
+                target = self.repo.joinpath(*parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [{"command": OTHER}]}]}}))
+                r = self.run_guard()
+                self.assertEqual(r["gate"], "failed", r)
+                self.assertRegex(r["modules"][0]["reason"], "variant|outside")
+
+    def test_root_skills_and_commands_beside_settings_are_fine(self):
+        self.settings(GOOD)
+        (self.repo / ".claude" / "skills" / "x").mkdir(parents=True)
+        (self.repo / ".claude" / "skills" / "x" / "SKILL.md").write_text("# x\n")
+        self.assertEqual(self.run_guard()["gate"], "passed")
+
     def test_production_suites_carry_the_guard_for_every_kairos_repo(self):
         for name in ("kairos-v1", "kairos-records-v1"):
             policy = json.loads((ROOT / "suites" / f"{name}.json").read_text())["modules"]["hook-guard"]
