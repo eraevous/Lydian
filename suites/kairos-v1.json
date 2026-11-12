@@ -38,6 +38,14 @@
     },
     "telosmith": {
       "timeout_seconds": 300
+    },
+    "repository-commands": {
+      "optional": true,
+      "timeout_seconds": 900,
+      "allowed_programs": [
+        "{python}",
+        "node"
+      ]
     }
   }
 }

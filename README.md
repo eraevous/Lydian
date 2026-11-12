@@ -13,8 +13,8 @@ Kairos has many repositories. Without a shared kit, adding, removing or fixing a
 
 ## Suites
 
-- `kairos-v1` (default, what repositories run): `repository-tests` and `telosmith`.
-- `kairos-records-v1`: `telosmith` only, for repositories with no unittest suite Lydian can run yet (no Python tests, or pytest/third-party dependencies). Their own CI keeps running their tests.
+- `kairos-v1` (default, what repositories run): `repository-tests`, `telosmith`, and `repository-commands` when the repository declares any.
+- `kairos-records-v1`: `telosmith`, plus `repository-commands` when declared, for repositories with no unittest suite Lydian can run yet (no Python tests, or pytest/third-party dependencies). Their own CI keeps running their tests.
 - `component-v1`: a demo profile that exercises all four modules against `examples/component_repo`.
 
 ## Checks (modules)
@@ -22,6 +22,7 @@ Kairos has many repositories. Without a shared kit, adding, removing or fixing a
 | Module | What it checks |
 | --- | --- |
 | `repository-tests` | Runs the repository's own unittest suite. Zero tests, all-skipped, failures and unexpected skips fail. |
+| `repository-commands` | Runs the test commands the repository declares in its adapter (`{"commands": [{"name": ..., "argv": [...]}]}`): suites unittest can't discover, such as a custom runner, node tests or a scanner. Only programs the central suite allows (`{python}`, `node`) may start a command. Each passes on exit 0; output is never copied into the report. Optional: a repository that declares none shows `not-declared`. A gate still needs at least one module that passed. |
 | `telosmith` | Runs Telosmith's structural edges snapshot and records check on the repository's `.aec/records.jsonl`. Telosmith is pinned here, not in each repository. Missing or malformed records fail. |
 | `modularity` | Declared forbidden absolute Python imports, by static parsing (no candidate code is imported). |
 | `interoperability` | Producer and consumer commands against central wire fixtures, including explicit rejection of invalid input. |
