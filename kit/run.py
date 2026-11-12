@@ -9,6 +9,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -241,10 +242,14 @@ def hook_guard(root, config, policy):
     checked = 0
     # Each name is a module: its .py/.pyc file and its package folder are both blocked
     # (Copilot on #7: sitecustomize/__init__.py imports as surely as sitecustomize.py).
+    # Native extensions import too (Copilot on #7: sitecustomize.cpython-311-x86_64-linux-gnu.so),
+    # so any root entry named <stem> or <stem>.<...>.<py|pyc|pyo|pyw|so|pyd|dylib> counts.
+    names = [e.name for e in root.iterdir()]
     for stem in policy.get("forbidden_root_modules", []):
-        for candidate in (stem, f"{stem}.py", f"{stem}.pyc"):
-            if (root / candidate).exists() or (root / candidate).is_symlink():
-                raise KitError(f"repository root has {candidate!r}, which could shadow a module an agent hook imports")
+        importable = re.compile(rf"{re.escape(stem)}(\.[^.]+)*\.(py|pyc|pyo|pyw|so|pyd|dylib)", re.I)
+        for name in names:
+            if name == stem or importable.fullmatch(name):
+                raise KitError(f"repository root has {name!r}, which could shadow a module an agent hook imports")
         checked += 1
     extras = set(allowed_extras.get("*", []))
     for repo, hashes in allowed_extras.items():

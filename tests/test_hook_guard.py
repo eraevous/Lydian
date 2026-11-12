@@ -133,6 +133,15 @@ class HookGuard(unittest.TestCase):
         (self.repo / "sitecustomize" / "__init__.py").unlink(); (self.repo / "sitecustomize").rmdir()
         (self.repo / "runpy.pyc").write_bytes(b"\0")
         self.assertEqual(self.run_guard()["gate"], "failed")
+        (self.repo / "runpy.pyc").unlink()
+        # Copilot on #7: native extensions import at startup too.
+        for native in ("sitecustomize.cpython-311-x86_64-linux-gnu.so", "aec.abi3.so", "runpy.pyd", "AEC.PY"):
+            with self.subTest(native=native):
+                (self.repo / native).write_bytes(b"\0")
+                self.assertEqual(self.run_guard()["gate"], "failed")
+                (self.repo / native).unlink()
+        (self.repo / "aec.md").write_text("notes\n")   # not importable: fine
+        self.assertEqual(self.run_guard()["gate"], "passed")
 
     def test_env_beside_an_approved_hook_fails_unless_fingerprinted(self):
         # Copilot on #7: "env": {"PYTHONPATH": "payload"} sends an approved hook to a planted package.
