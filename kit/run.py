@@ -201,7 +201,12 @@ def repository_commands(root, config, policy):
         if not isinstance(argv, list) or not argv or argv[0] not in allowed:
             raise KitError(f"command {entry['name']!r}: program not allowed by the central suite")
     for entry in commands:
-        result = command(root, entry["argv"], timeout=policy.get("timeout_seconds", 600), discard_output=True)
+        try:
+            result = command(root, entry["argv"], timeout=policy.get("timeout_seconds", 600), discard_output=True)
+        except KitError as exc:
+            # Timeout or can't start: name the command (never its argv or output) so a
+            # multi-command adapter shows which suite broke (Copilot on Lydian#6).
+            raise KitError(f"command {entry['name']!r} {exc}") from exc
         if result.returncode:
             raise KitError(f"command {entry['name']!r} failed (exit {result.returncode}; output not copied)")
     return len(commands)

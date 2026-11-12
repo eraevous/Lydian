@@ -53,6 +53,20 @@ class RepositoryCommands(unittest.TestCase):
         r = self.run_kit([{"name": "bytes", "argv": ["{python}", "-I", "bytes.py"]}])
         self.assertEqual(r["gate"], "passed", r)
 
+    def test_timeout_and_missing_program_name_the_command(self):
+        # Copilot on Lydian#6: a timeout or a program that can't start must say which command.
+        self.suite["modules"]["repository-commands"]["timeout_seconds"] = 1
+        (self.repo / "slow.py").write_text("import time\ntime.sleep(5)\n")
+        r = self.run_kit([{"name": "fast", "argv": ["{python}", "-I", "ok.py"]},
+                          {"name": "slow suite", "argv": ["{python}", "-I", "slow.py"]}])
+        self.assertEqual(r["gate"], "failed")
+        self.assertIn("slow suite", r["modules"][0]["reason"])
+        self.assertIn("TimeoutExpired", r["modules"][0]["reason"])
+        self.assertNotIn("slow.py", r["modules"][0]["reason"])
+        self.suite["modules"]["repository-commands"]["allowed_programs"] = ["{python}", "kairos-no-such-program"]
+        r = self.run_kit([{"name": "ghost", "argv": ["kairos-no-such-program"]}])
+        self.assertIn("ghost", r["modules"][0]["reason"])
+
     def test_program_outside_central_allowlist_is_refused_before_anything_runs(self):
         marker = self.repo / "ran"
         r = self.run_kit([{"name": "ok", "argv": ["{python}", "-I", "-c", f"open({str(marker)!r}, 'w')"]},
