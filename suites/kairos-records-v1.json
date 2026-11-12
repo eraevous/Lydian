@@ -2,17 +2,6 @@
   "schema": 1,
   "profile": "kairos-records-v1",
   "modules": {
-    "telosmith": {
-      "timeout_seconds": 300
-    },
-    "repository-commands": {
-      "optional": true,
-      "timeout_seconds": 900,
-      "allowed_programs": [
-        "{python}",
-        "node"
-      ]
-    },
     "hook-guard": {
       "adapter_optional": true,
       "why": "Hook commands in a repository's .claude settings run on the machine of anyone who opens an agent session there. A branch can change them; this check holds them to fingerprints kept here, so a changed hook fails CI until the owner adds its fingerprint centrally (Zach, 2026-11-12).",
@@ -74,6 +63,18 @@
         "os.py",
         "io.py",
         "abc.py"
+      ],
+      "run_first": true
+    },
+    "telosmith": {
+      "timeout_seconds": 300
+    },
+    "repository-commands": {
+      "optional": true,
+      "timeout_seconds": 900,
+      "allowed_programs": [
+        "{python}",
+        "node"
       ]
     }
   }

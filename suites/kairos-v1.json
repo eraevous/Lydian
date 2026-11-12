@@ -2,51 +2,6 @@
   "schema": 1,
   "profile": "kairos-v1",
   "modules": {
-    "repository-tests": {
-      "allow_skips": false,
-      "timeout_seconds": 600,
-      "allowed_skip_reasons": [
-        {
-          "reason": "specify CLI not installed",
-          "repos": [
-            "eraevous/Telosmith"
-          ],
-          "why": "Optional Spec Kit integration test needs the external specify CLI, which CI does not install."
-        },
-        {
-          "reason": "KB database not present",
-          "repos": [
-            "eraevous/MtG"
-          ],
-          "why": "KB-backed tests need the KB release downloaded per data/README.md; CI does not download it. MtG's own CI covers the rest."
-        },
-        {
-          "reason": "KB database not installed",
-          "repos": [
-            "eraevous/MtG"
-          ],
-          "why": "Same as above (older message wording in the same test file)."
-        },
-        {
-          "reason": "KB release predates",
-          "repos": [
-            "eraevous/MtG"
-          ],
-          "why": "Version guard for a KB-backed test (C-024); only reachable when a KB is present."
-        }
-      ]
-    },
-    "telosmith": {
-      "timeout_seconds": 300
-    },
-    "repository-commands": {
-      "optional": true,
-      "timeout_seconds": 900,
-      "allowed_programs": [
-        "{python}",
-        "node"
-      ]
-    },
     "hook-guard": {
       "adapter_optional": true,
       "why": "Hook commands in a repository's .claude settings run on the machine of anyone who opens an agent session there. A branch can change them; this check holds them to fingerprints kept here, so a changed hook fails CI until the owner adds its fingerprint centrally (Zach, 2026-11-12).",
@@ -108,6 +63,52 @@
         "os.py",
         "io.py",
         "abc.py"
+      ],
+      "run_first": true
+    },
+    "repository-tests": {
+      "allow_skips": false,
+      "timeout_seconds": 600,
+      "allowed_skip_reasons": [
+        {
+          "reason": "specify CLI not installed",
+          "repos": [
+            "eraevous/Telosmith"
+          ],
+          "why": "Optional Spec Kit integration test needs the external specify CLI, which CI does not install."
+        },
+        {
+          "reason": "KB database not present",
+          "repos": [
+            "eraevous/MtG"
+          ],
+          "why": "KB-backed tests need the KB release downloaded per data/README.md; CI does not download it. MtG's own CI covers the rest."
+        },
+        {
+          "reason": "KB database not installed",
+          "repos": [
+            "eraevous/MtG"
+          ],
+          "why": "Same as above (older message wording in the same test file)."
+        },
+        {
+          "reason": "KB release predates",
+          "repos": [
+            "eraevous/MtG"
+          ],
+          "why": "Version guard for a KB-backed test (C-024); only reachable when a KB is present."
+        }
+      ]
+    },
+    "telosmith": {
+      "timeout_seconds": 300
+    },
+    "repository-commands": {
+      "optional": true,
+      "timeout_seconds": 900,
+      "allowed_programs": [
+        "{python}",
+        "node"
       ]
     }
   }

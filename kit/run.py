@@ -251,7 +251,9 @@ def hook_guard(root, config, policy):
         hooks = settings.get("hooks", {}) if isinstance(settings, dict) else {}
         if not isinstance(hooks, dict):
             raise KitError(f"{rel}: hooks must be an object")
-        for event, matchers in hooks.items():
+        for e_index, (_event, matchers) in enumerate(hooks.items(), 1):
+            # The event key comes from the file, so it is never echoed: positions only.
+            event = f"hook group {e_index}"
             for matcher in matchers if isinstance(matchers, list) else [None]:
                 entries = matcher.get("hooks") if isinstance(matcher, dict) else None
                 if not isinstance(entries, list):
@@ -324,7 +326,11 @@ def evaluate(root, adapter, suite):
     if set(config) - set(MODULES):
         raise KitError("adapter names an unknown module")
     results = []
-    for name, policy in definitions.items():
+    # A module whose policy says run_first (hook-guard) inspects the checkout before any module
+    # runs repository-controlled code, which could otherwise delete what it looks for
+    # (Codex P1 and Copilot on Lydian#7). Other modules keep their declared order.
+    ordered = sorted(definitions.items(), key=lambda kv: not (isinstance(kv[1], dict) and kv[1].get("run_first") is True))
+    for name, policy in ordered:
         result = {"module": name, "status": "failed", "cases": 0}
         try:
             if name not in MODULES:
