@@ -32,7 +32,8 @@ class HookGuard(unittest.TestCase):
         self.repo = Path(tmp.name)
         self.policy = {"adapter_optional": True,
                        "allowed_hook_commands_sha256": {"*": [sha(GOOD)], "eraevous/special": [sha(OTHER)]},
-                       "forbidden_root_names": ["aec", "aec.py", "runpy.py"]}
+                       "allowed_settings_extras_sha256": {"*": []},
+                       "forbidden_root_modules": ["aec", "runpy", "sitecustomize"]}
 
     def settings(self, *commands, name="settings.json"):
         (self.repo / ".claude").mkdir(exist_ok=True)
@@ -122,12 +123,54 @@ class HookGuard(unittest.TestCase):
                 self.assertEqual(r["gate"], "failed")
                 self.assertNotIn("example.invalid", json.dumps(r))
 
+    def test_package_form_of_a_blocked_module_fails(self):
+        # Copilot on #7: sitecustomize/__init__.py imports just like sitecustomize.py.
+        (self.repo / "sitecustomize").mkdir()
+        (self.repo / "sitecustomize" / "__init__.py").write_text("print('x')\n")
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "failed")
+        self.assertIn("sitecustomize", r["modules"][0]["reason"])
+        (self.repo / "sitecustomize" / "__init__.py").unlink(); (self.repo / "sitecustomize").rmdir()
+        (self.repo / "runpy.pyc").write_bytes(b"\0")
+        self.assertEqual(self.run_guard()["gate"], "failed")
+
+    def test_env_beside_an_approved_hook_fails_unless_fingerprinted(self):
+        # Copilot on #7: "env": {"PYTHONPATH": "payload"} sends an approved hook to a planted package.
+        (self.repo / ".claude").mkdir()
+        body = {"env": {"PYTHONPATH": "payload"},
+                "hooks": {"PostToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": GOOD}]}]}}
+        (self.repo / ".claude" / "settings.json").write_text(json.dumps(body))
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "failed")
+        self.assertNotIn("PYTHONPATH", json.dumps(r))
+        env_digest = hashlib.sha256(json.dumps({"env": {"PYTHONPATH": "payload"}}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        self.policy["allowed_settings_extras_sha256"] = {"eraevous/anything": [env_digest]}
+        self.assertEqual(self.run_guard()["gate"], "passed")
+        self.assertEqual(self.run_guard("eraevous/other")["gate"], "failed")
+
+    def test_unknown_fields_in_hook_entries_fail(self):
+        self.settings(GOOD)
+        path = self.repo / ".claude" / "settings.json"
+        body = json.loads(path.read_text())
+        body["hooks"]["PostToolUse"][0]["hooks"][0]["env"] = {"PYTHONPATH": "payload"}
+        path.write_text(json.dumps(body))
+        self.assertEqual(self.run_guard()["gate"], "failed")
+        body["hooks"]["PostToolUse"][0]["hooks"][0].pop("env")
+        body["hooks"]["PostToolUse"][0]["extra"] = 1
+        path.write_text(json.dumps(body))
+        self.assertEqual(self.run_guard()["gate"], "failed")
+
+    def test_mcp_config_must_be_fingerprinted(self):
+        (self.repo / ".mcp.json").write_text(json.dumps({"mcpServers": {"x": {"command": "sh"}}}))
+        self.assertEqual(self.run_guard()["gate"], "failed")
+
     def test_production_suites_carry_the_guard_for_every_kairos_repo(self):
         for name in ("kairos-v1", "kairos-records-v1"):
             policy = json.loads((ROOT / "suites" / f"{name}.json").read_text())["modules"]["hook-guard"]
             self.assertTrue(policy["adapter_optional"])
             self.assertIn("*", policy["allowed_hook_commands_sha256"])
-            self.assertIn("aec.py", policy["forbidden_root_names"])
+            self.assertIn("aec", policy["forbidden_root_modules"])
+            self.assertIn("sitecustomize", policy["forbidden_root_modules"])
             self.assertTrue(policy["run_first"])
 
 

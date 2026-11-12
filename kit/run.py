@@ -220,25 +220,49 @@ def hook_guard(root, config, policy):
     can change it. This check runs from Lydian, not from the branch: every hook command must match
     a SHA-256 fingerprint listed for that repository (or for every repository, under "*") in the
     central suite. A new or changed hook fails until the owner adds its fingerprint here.
-    It also fails if the repository root holds a file or folder that would shadow a module a hook
-    imports (aec, runpy, site, ...), the trick behind Telosmith#77.
+    Every other setting in those files (env, statusLine, helper commands, ...) and a root
+    `.mcp.json` must match fingerprints too; unknown fields in hook entries fail. It also fails if
+    the repository root holds a module file, compiled file or package folder that would shadow a
+    module a hook imports (aec, runpy, site, sitecustomize, ...), the trick behind Telosmith#77.
 
     What it can't do: vet code a hook legitimately runs from the checkout (for example a repo's
     own drift script), and it can't stop a pull request that rewrites the workflow calling it.
     Owner review of `.github/` and `.claude/` changes covers those. No adapter needed.
     """
     allowed_map = policy.get("allowed_hook_commands_sha256", {})
-    if not isinstance(allowed_map, dict):
-        raise KitError("allowed_hook_commands_sha256 must be an object")
+    allowed_extras = policy.get("allowed_settings_extras_sha256", {})
+    if not isinstance(allowed_map, dict) or not isinstance(allowed_extras, dict):
+        raise KitError("allowed_hook_commands_sha256 and allowed_settings_extras_sha256 must be objects")
     repository = os.environ.get("KAIROS_REPOSITORY", "").lower()
     allowed = set(allowed_map.get("*", []))
     for repo, hashes in allowed_map.items():
         if repo != "*" and repo.lower() == repository:
             allowed |= set(hashes)
     checked = 0
-    for name in policy.get("forbidden_root_names", []):
-        if (root / name).exists() or (root / name).is_symlink():
-            raise KitError(f"repository root has {name!r}, which could shadow a module an agent hook imports")
+    # Each name is a module: its .py/.pyc file and its package folder are both blocked
+    # (Copilot on #7: sitecustomize/__init__.py imports as surely as sitecustomize.py).
+    for stem in policy.get("forbidden_root_modules", []):
+        for candidate in (stem, f"{stem}.py", f"{stem}.pyc"):
+            if (root / candidate).exists() or (root / candidate).is_symlink():
+                raise KitError(f"repository root has {candidate!r}, which could shadow a module an agent hook imports")
+        checked += 1
+    extras = set(allowed_extras.get("*", []))
+    for repo, hashes in allowed_extras.items():
+        if repo != "*" and repo.lower() == repository:
+            extras |= set(hashes)
+
+    def canonical(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    # An MCP config starts programs too (Copilot on #7: anything that changes what runs counts).
+    mcp = within(root, ".mcp.json")
+    if mcp.is_file():
+        try:
+            digest = canonical(json.loads(mcp.read_text(encoding="utf-8")))
+        except ValueError:
+            raise KitError(".mcp.json is not valid JSON")
+        if digest not in extras:
+            raise KitError(f".mcp.json {digest[:12]} is not on the central allowlist")
         checked += 1
     for rel in (".claude/settings.json", ".claude/settings.local.json"):
         path = within(root, rel)
@@ -248,7 +272,19 @@ def hook_guard(root, config, policy):
             settings = json.loads(path.read_text(encoding="utf-8"))
         except ValueError:
             raise KitError(f"{rel} is not valid JSON")
-        hooks = settings.get("hooks", {}) if isinstance(settings, dict) else {}
+        if not isinstance(settings, dict):
+            raise KitError(f"{rel} must be a JSON object")
+        # Deny by default: any setting besides hooks (env, statusLine, helpers, ...) can change what
+        # runs, so each one must match a fingerprint kept here (Copilot on #7: an "env" PYTHONPATH
+        # sent an approved hook to a planted package). Keys are never echoed: positions only.
+        for k_index, key in enumerate(sorted(settings), 1):
+            if key == "hooks":
+                continue
+            digest = canonical({key: settings[key]})
+            if digest not in extras:
+                raise KitError(f"{rel}: setting {k_index} ({digest[:12]}) besides hooks is not on the central allowlist")
+            checked += 1
+        hooks = settings.get("hooks", {})
         if not isinstance(hooks, dict):
             raise KitError(f"{rel}: hooks must be an object")
         for e_index, (_event, matchers) in enumerate(hooks.items(), 1):
@@ -256,9 +292,13 @@ def hook_guard(root, config, policy):
             event = f"hook group {e_index}"
             for matcher in matchers if isinstance(matchers, list) else [None]:
                 entries = matcher.get("hooks") if isinstance(matcher, dict) else None
+                if isinstance(matcher, dict) and set(matcher) - {"matcher", "hooks"}:
+                    raise KitError(f"{rel}: {event} has a field the guard doesn't know")
                 if not isinstance(entries, list):
                     raise KitError(f"{rel}: {event} hook entry has an unexpected shape")
                 for entry in entries:
+                    if isinstance(entry, dict) and set(entry) - {"type", "command", "timeout"}:
+                        raise KitError(f"{rel}: {event} hook has a field the guard doesn't know")
                     cmd = entry.get("command") if isinstance(entry, dict) else None
                     if not isinstance(cmd, str):
                         raise KitError(f"{rel}: {event} hook without a command string")

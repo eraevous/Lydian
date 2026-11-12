@@ -50,21 +50,22 @@
           "5bd1822b388c63f2cedbda2118d17cbaf4574feddacf8dd04376263a5e639e29"
         ]
       },
-      "forbidden_root_names": [
+      "run_first": true,
+      "forbidden_root_modules": [
         "aec",
-        "aec.py",
-        "runpy.py",
-        "site.py",
-        "sitecustomize.py",
-        "usercustomize.py",
+        "runpy",
+        "site",
+        "sitecustomize",
+        "usercustomize",
         "encodings",
-        "encodings.py",
-        "codecs.py",
-        "os.py",
-        "io.py",
-        "abc.py"
+        "codecs",
+        "os",
+        "io",
+        "abc"
       ],
-      "run_first": true
+      "allowed_settings_extras_sha256": {
+        "*": []
+      }
     },
     "repository-tests": {
       "allow_skips": false,
