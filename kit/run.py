@@ -37,7 +37,7 @@ def within(root, value):
     return path
 
 
-def command(root, argv, input_text="", timeout=30):
+def command(root, argv, input_text="", timeout=30, discard_output=False):
     if not isinstance(argv, list) or not argv or not all(isinstance(x, str) and x for x in argv):
         raise KitError("command must be a nonempty argv array")
     argv = [sys.executable if x == "{python}" else x for x in argv]
@@ -46,6 +46,12 @@ def command(root, argv, input_text="", timeout=30):
     env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "WINDIR", "TMPDIR", "TEMP", "TMP") if key in os.environ}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     try:
+        if discard_output:
+            # Only the exit code matters: unread output can't fail the run (undecodable bytes)
+            # or fill memory (a long suite's log).
+            return subprocess.run(argv, cwd=root, env=env, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  timeout=timeout, check=False)
         return subprocess.run(argv, cwd=root, env=env, input=input_text, text=True,
                               capture_output=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -195,7 +201,7 @@ def repository_commands(root, config, policy):
         if not isinstance(argv, list) or not argv or argv[0] not in allowed:
             raise KitError(f"command {entry['name']!r}: program not allowed by the central suite")
     for entry in commands:
-        result = command(root, entry["argv"], timeout=policy.get("timeout_seconds", 600))
+        result = command(root, entry["argv"], timeout=policy.get("timeout_seconds", 600), discard_output=True)
         if result.returncode:
             raise KitError(f"command {entry['name']!r} failed (exit {result.returncode}; output not copied)")
     return len(commands)

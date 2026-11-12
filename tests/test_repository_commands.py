@@ -47,6 +47,12 @@ class RepositoryCommands(unittest.TestCase):
         self.assertIn("regression", r["modules"][0]["reason"])
         self.assertNotIn("SECRET", str(r))
 
+    def test_undecodable_output_does_not_fail_an_exit_zero_command(self):
+        # Copilot on Lydian#6: decoding unused output could turn exit 0 into a failure.
+        (self.repo / "bytes.py").write_text("import sys\nsys.stdout.buffer.write(b'\\xff\\xfe')\nsys.stderr.buffer.write(b'\\xff')\n")
+        r = self.run_kit([{"name": "bytes", "argv": ["{python}", "-I", "bytes.py"]}])
+        self.assertEqual(r["gate"], "passed", r)
+
     def test_program_outside_central_allowlist_is_refused_before_anything_runs(self):
         marker = self.repo / "ran"
         r = self.run_kit([{"name": "ok", "argv": ["{python}", "-I", "-c", f"open({str(marker)!r}, 'w')"]},
