@@ -43,7 +43,7 @@ class ProductionSuiteTests(unittest.TestCase):
             self.assertEqual(report["gate"], "passed", report)
             self.assertEqual({m["module"]: m["status"] for m in report["modules"]},
                              {"repository-tests": "passed", "telosmith": "passed",
-                              "repository-commands": "not-declared"})
+                              "repository-commands": "not-declared", "hook-guard": "passed"})
 
 
 if __name__ == "__main__":

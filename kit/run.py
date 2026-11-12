@@ -9,6 +9,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -212,6 +213,138 @@ def repository_commands(root, config, policy):
     return len(commands)
 
 
+def hook_guard(root, config, policy):
+    """Hold a repository's agent hooks to fingerprints kept centrally (Zach, 2026-11-12).
+
+    Why: a hook command in `.claude/settings.json` (or a committed `settings.local.json`) runs
+    automatically on the machine of anyone who opens an agent session in that checkout. A branch
+    can change it. This check runs from Lydian, not from the branch: every hook command must match
+    a SHA-256 fingerprint listed for that repository (or for every repository, under "*") in the
+    central suite. A new or changed hook fails until the owner adds its fingerprint here.
+    Every other setting in those files (env, statusLine, helper commands, ...) and a root
+    `.mcp.json` must match fingerprints too; unknown fields in hook entries fail. It also fails if
+    the repository root holds a module file, compiled file or package folder that would shadow a
+    module a hook imports (aec, runpy, site, sitecustomize, ...), the trick behind Telosmith#77.
+
+    What it can't do: vet code a hook legitimately runs from the checkout (for example a repo's
+    own drift script), and it can't stop a pull request that rewrites the workflow calling it.
+    Owner review of `.github/` and `.claude/` changes covers those. No adapter needed.
+    """
+    allowed_map = policy.get("allowed_hook_commands_sha256", {})
+    allowed_extras = policy.get("allowed_settings_extras_sha256", {})
+    if not isinstance(allowed_map, dict) or not isinstance(allowed_extras, dict):
+        raise KitError("allowed_hook_commands_sha256 and allowed_settings_extras_sha256 must be objects")
+    repository = os.environ.get("KAIROS_REPOSITORY", "").lower()
+    allowed = set(allowed_map.get("*", []))
+    for repo, hashes in allowed_map.items():
+        if repo != "*" and repo.lower() == repository:
+            allowed |= set(hashes)
+    checked = 0
+    # Each name is a module: its .py/.pyc file and its package folder are both blocked
+    # (Copilot on #7: sitecustomize/__init__.py imports as surely as sitecustomize.py).
+    # Native extensions import too (Copilot on #7: sitecustomize.cpython-311-x86_64-linux-gnu.so),
+    # so any root entry named <stem> or <stem>.<...>.<py|pyc|pyo|pyw|so|pyd|dylib> counts.
+    names = [e.name for e in root.iterdir()]
+    for stem in policy.get("forbidden_root_modules", []):
+        importable = re.compile(rf"{re.escape(stem)}(\.[^.]+)*\.(py|pyc|pyo|pyw|so|pyd|dylib)", re.I)
+        for name in names:
+            if name == stem or importable.fullmatch(name):
+                raise KitError(f"repository root has {name!r}, which could shadow a module an agent hook imports")
+        checked += 1
+    extras = set(allowed_extras.get("*", []))
+    for repo, hashes in allowed_extras.items():
+        if repo != "*" and repo.lower() == repository:
+            extras |= set(hashes)
+
+    def canonical(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    # Aliases of the guarded paths (Codex security review on #7). Case-insensitive filesystems (macOS,
+    # Windows) treat `.CLAUDE/settings.local.json` or `.MCP.json` as the real file; Windows also drops
+    # trailing dots and spaces. A session started in a subfolder reads that subfolder's `.claude/` and
+    # `.mcp.json`. So: any spelling of a guarded path other than the exact root one fails, anywhere.
+    def norm(name):
+        return name.rstrip(". ").casefold()
+
+    settings_names = {"settings.json", "settings.local.json"}
+    # No symlinks on guarded paths (Codex on #7): a symlinked root .claude points the walk below
+    # at a folder whose name isn't checked, and a symlinked settings file can change under the check.
+    for rel in (".claude", ".claude/settings.json", ".claude/settings.local.json", ".mcp.json"):
+        if (root / rel).is_symlink():
+            raise KitError("a guarded agent-settings path is a symlink")
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        here = Path(dirpath)
+        at_root = here == root
+        for d in dirnames:
+            if norm(d) == ".claude" and not (at_root and d == ".claude"):
+                if any(norm(f.name) in settings_names for f in (here / d).iterdir()):
+                    raise KitError("repository has agent settings outside the root .claude folder "
+                                   "(a case variant, a trailing dot or space, or a subfolder)")
+        if norm(here.name) == ".claude" and here.parent == root and here.name == ".claude":
+            for f in filenames:
+                if norm(f) in settings_names and f not in settings_names:
+                    raise KitError("repository has a case or trailing-character variant of an agent-settings file")
+        for f in filenames:
+            if norm(f) == ".mcp.json" and not (at_root and f == ".mcp.json"):
+                raise KitError("repository has an MCP config outside the exact root .mcp.json")
+
+    # An MCP config starts programs too (Copilot on #7: anything that changes what runs counts).
+    mcp = within(root, ".mcp.json")
+    if mcp.is_file():
+        try:
+            digest = canonical(json.loads(mcp.read_text(encoding="utf-8")))
+        except ValueError:
+            raise KitError(".mcp.json is not valid JSON")
+        if digest not in extras:
+            raise KitError(f".mcp.json {digest[:12]} is not on the central allowlist")
+        checked += 1
+    for rel in (".claude/settings.json", ".claude/settings.local.json"):
+        path = within(root, rel)
+        if not path.is_file():
+            continue
+        try:
+            settings = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            raise KitError(f"{rel} is not valid JSON")
+        if not isinstance(settings, dict):
+            raise KitError(f"{rel} must be a JSON object")
+        # Deny by default: any setting besides hooks (env, statusLine, helpers, ...) can change what
+        # runs, so each one must match a fingerprint kept here (Copilot on #7: an "env" PYTHONPATH
+        # sent an approved hook to a planted package). Keys are never echoed: positions only.
+        for k_index, key in enumerate(sorted(settings), 1):
+            if key == "hooks":
+                continue
+            digest = canonical({key: settings[key]})
+            if digest not in extras:
+                raise KitError(f"{rel}: setting {k_index} ({digest[:12]}) besides hooks is not on the central allowlist")
+            checked += 1
+        hooks = settings.get("hooks", {})
+        if not isinstance(hooks, dict):
+            raise KitError(f"{rel}: hooks must be an object")
+        for e_index, (_event, matchers) in enumerate(hooks.items(), 1):
+            # The event key comes from the file, so it is never echoed: positions only.
+            event = f"hook group {e_index}"
+            for matcher in matchers if isinstance(matchers, list) else [None]:
+                entries = matcher.get("hooks") if isinstance(matcher, dict) else None
+                if isinstance(matcher, dict) and set(matcher) - {"matcher", "hooks"}:
+                    raise KitError(f"{rel}: {event} has a field the guard doesn't know")
+                if not isinstance(entries, list):
+                    raise KitError(f"{rel}: {event} hook entry has an unexpected shape")
+                for entry in entries:
+                    if isinstance(entry, dict) and set(entry) - {"type", "command", "timeout"}:
+                        raise KitError(f"{rel}: {event} hook has a field the guard doesn't know")
+                    cmd = entry.get("command") if isinstance(entry, dict) else None
+                    if not isinstance(cmd, str):
+                        raise KitError(f"{rel}: {event} hook without a command string")
+                    digest = hashlib.sha256(cmd.encode("utf-8")).hexdigest()
+                    if digest not in allowed:
+                        raise KitError(f"{rel}: {event} hook {digest[:12]} is not on the central allowlist "
+                                       f"(a changed or new hook; the owner adds its fingerprint in Lydian)")
+                    checked += 1
+    return checked
+
+
 def telosmith(root, config, policy):
     """Run Telosmith's structural records check from the kit, so no repo copies CI snippets.
 
@@ -246,7 +379,7 @@ def telosmith(root, config, policy):
 
 MODULES = {"interoperability": interoperability, "modularity": modularity,
            "repository-tests": repository_tests, "repository-commands": repository_commands,
-           "telosmith": telosmith}
+           "hook-guard": hook_guard, "telosmith": telosmith}
 
 
 def evaluate(root, adapter, suite):
@@ -268,7 +401,11 @@ def evaluate(root, adapter, suite):
     if set(config) - set(MODULES):
         raise KitError("adapter names an unknown module")
     results = []
-    for name, policy in definitions.items():
+    # A module whose policy says run_first (hook-guard) inspects the checkout before any module
+    # runs repository-controlled code, which could otherwise delete what it looks for
+    # (Codex P1 and Copilot on Lydian#7). Other modules keep their declared order.
+    ordered = sorted(definitions.items(), key=lambda kv: not (isinstance(kv[1], dict) and kv[1].get("run_first") is True))
+    for name, policy in ordered:
         result = {"module": name, "status": "failed", "cases": 0}
         try:
             if name not in MODULES:
@@ -278,6 +415,8 @@ def evaluate(root, adapter, suite):
                 result["status"] = "not-declared"
                 results.append(result)
                 continue
+            if name not in config and isinstance(policy, dict) and policy.get("adapter_optional") is True:
+                config = dict(config, **{name: {}})
             if name not in config:
                 result["status"] = "blocked"
                 raise KitError("required module lacks an adapter")
