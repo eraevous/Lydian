@@ -47,7 +47,8 @@
           "156000374eb0eae620f749746bcbfbf2aab779de42b43ffe73879c796c657874"
         ],
         "*": [
-          "5bd1822b388c63f2cedbda2118d17cbaf4574feddacf8dd04376263a5e639e29"
+          "5bd1822b388c63f2cedbda2118d17cbaf4574feddacf8dd04376263a5e639e29",
+          "cb8eaebeb5becbf1c2363d3a465d8f2189da380877a716a77afb47372545d3fb"
         ]
       },
       "run_first": true,
