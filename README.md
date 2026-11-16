@@ -13,9 +13,11 @@ Kairos has many repositories. Without a shared kit, adding, removing or fixing a
 
 ## Suites
 
-- `kairos-v1` (default, what repositories run): `repository-tests`, `telosmith`, and `repository-commands` when the repository declares any.
-- `kairos-records-v1`: `telosmith`, plus `repository-commands` when declared, for repositories with no unittest suite Lydian can run yet (no Python tests, or pytest/third-party dependencies). Their own CI keeps running their tests.
-- `component-v1`: a demo profile that exercises all four modules against `examples/component_repo`.
+Both production suites run `hook-guard` first, in every repository.
+
+- `kairos-v1` (default, what repositories run): `hook-guard`, `repository-tests`, `telosmith`, and `repository-commands` when the repository declares any.
+- `kairos-records-v1`: `hook-guard` and `telosmith`, plus `repository-commands` when declared, for repositories with no unittest suite Lydian can run yet (no Python tests, or pytest/third-party dependencies). Their own CI keeps running their tests.
+- `component-v1`: a demo profile that exercises `repository-tests`, `modularity` and `interoperability` against `examples/component_repo`.
 
 ## Checks (modules)
 
@@ -48,8 +50,7 @@ Callers use `@main` (DEC-210). A merged change reaches every repository on its n
 
 ## Status
 
-- Initial import of the prototype (local, unpublished until now). Not yet called by any repository.
-- First consumers: Telosmith and MtG, before the rest.
+- In use: the Kairos repositories call it from `.github/workflows/kairos.yml`.
 - Not a sandbox outside GitHub Actions: locally, run it only on reviewed code.
 - Earlier design notes: `docs/prototype-notes.md`.
 
