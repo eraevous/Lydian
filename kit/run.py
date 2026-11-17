@@ -224,6 +224,9 @@ LETTER_ESCAPE = re.compile(r"\\(?:[xuU]|$)")
 YAML_TAG = re.compile(r"(?:^|[\s\[\]{},:?-])!")
 
 
+LFS_POINTER = b"version https://git-lfs.github.com/spec/"
+
+
 def frontmatter_declares_hooks(path):
     """True if a markdown file's YAML frontmatter could hold a hooks key.
 
@@ -356,6 +359,12 @@ def hook_guard(root, config, policy):
         for f in filenames:
             if norm(f) == ".mcp.json" and not (at_root and f == ".mcp.json"):
                 raise KitError("repository has an MCP config outside the exact root .mcp.json")
+            # CI checks out without Git LFS, so a file committed through LFS is only a pointer here and
+            # becomes the real file (a hook-bearing skill, say) on a developer's checkout (Copilot on #12).
+            if in_claude and (here / f).is_file():
+                with open(here / f, "rb") as fh:
+                    if fh.read(len(LFS_POINTER)) == LFS_POINTER:
+                        raise KitError("a file under .claude is a Git LFS pointer, whose real contents the guard can't inspect")
             if in_claude and norm(f).endswith(".md") and frontmatter_declares_hooks(here / f):
                 # The file's path is repository text, so it is not echoed.
                 raise KitError("a skill, subagent or command file under .claude declares hooks in its "

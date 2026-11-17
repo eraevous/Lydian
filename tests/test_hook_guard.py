@@ -307,6 +307,25 @@ class HookGuard(unittest.TestCase):
                 self.assertEqual(r["gate"], "failed", (label, r))
                 self.assertIn("symlink", r["modules"][0]["reason"])
 
+    def test_lfs_pointers_under_claude_fail(self):
+        # Copilot on #12: CI checks out without LFS, so a hook-bearing SKILL.md committed through
+        # LFS is only a pointer here and materializes on a developer's LFS-enabled checkout.
+        pointer = ("version https://git-lfs.github.com/spec/v1\n"
+                   "oid sha256:" + "0" * 64 + "\nsize 120\n")
+        for rel in (".claude/skills/x/SKILL.md", ".claude/agents/a.md", "pkg/.claude/skills/y/notes.txt"):
+            with self.subTest(rel=rel):
+                self.setUp()
+                self.settings(GOOD)
+                self.md(rel, pointer)
+                r = self.run_guard()
+                self.assertEqual(r["gate"], "failed", r)
+                self.assertIn("LFS", r["modules"][0]["reason"])
+        # Decoy: an LFS pointer outside any .claude folder is not this check's business.
+        self.setUp()
+        self.settings(GOOD)
+        self.md("assets/big.bin", pointer)
+        self.assertEqual(self.run_guard()["gate"], "passed")
+
     def test_submodules_fail(self):
         # Codex security review on #12: checkout leaves a submodule empty, so a skill a developer
         # later initializes under .claude is never scanned. Lydian can't see submodule contents.
