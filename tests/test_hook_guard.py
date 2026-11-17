@@ -265,9 +265,12 @@ class HookGuard(unittest.TestCase):
             "unknown escape": '---\n"\\qhooks": {}\n---\n',
             "tag": "---\n!!str hooks: {}\n---\n",
             "anchor": "---\n&h hooks: {}\n---\n",
-            "alias key": "---\nname: &h x\n*h : {}\n---\n",
+            "alias key": "---\nname: &h hooks\n*h : {}\n---\n",
             "flow sequence": "---\nx: [hooks: {}]\n---\n",
-            "explicit key, any": '---\n? "x"\n: {}\n---\n',
+            "explicit key": '---\n? "hooks"\n: {}\n---\n',
+            "explicit key, no space (Codex on #12)": '---\n{name: x, ?"hooks": {Stop: [{?"hooks": []}]}}\n---\n',
+            "escaped line break": '---\n"hoo\\\n  ks": {}\n---\n',
+            "word in a value (strict by design)": "---\ndescription: Manage git hooks\n---\n",
             "explicit key in a flow mapping": "---\n{name: x, ? hooks: {Stop: [{? hooks: []}]}}\n---\n",
             "explicit key in a flow sequence": "---\nx: [? hooks : {}]\n---\n",
             # The frontmatter must not end early for this check where Claude Code reads on.
@@ -312,8 +315,8 @@ class HookGuard(unittest.TestCase):
         self.settings(GOOD)
         self.md(".claude/skills/a/SKILL.md", '---\nname: "speckit-implement"\ndescription: "Run tasks"\n'
                 'metadata:\n  author: "github-spec-kit"\nuser-invocable: true\n---\n\n## Input\n')
-        self.md(".claude/skills/b/SKILL.md", "---\nname: b\ndescription: Manage git hooks: pre-commit and more\n"
-                "tags: [hooks, git]\n---\nhooks:\n  Stop: []\n")
+        self.md(".claude/skills/b/SKILL.md", "---\nname: b\ndescription: Manage a git hook: pre-commit and more\n"
+                "tags: [hook, git, \"\\t\"]\n---\nhooks:\n  Stop: []\n")
         self.md(".claude/agents/c.md", "# no frontmatter\nhooks:\n  Stop: []\n")
         self.md("docs/hooks.md", self.FRONTMATTER_HOOK)   # outside any .claude folder: not loaded as a skill
         r = self.run_guard()

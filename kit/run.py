@@ -213,54 +213,37 @@ def repository_commands(root, config, policy):
     return len(commands)
 
 
-# Where a YAML mapping key can start: a line (after indentation and any "- " sequence entries) or a
-# flow collection ({ [ ,). Node properties (a !tag or &anchor) may come before the key.
-KEY_START = r"(?:^\s*(?:-\s+)*|[{\[,]\s*)(?:[!&]\S*\s+)*"
-PLAIN_OR_SINGLE_KEY = re.compile(KEY_START + r"(['\"]?)hooks\1\s*(?::|$)", re.I)
-DOUBLE_QUOTED_KEY = re.compile(KEY_START + r'"((?:[^"\\]|\\.)*)"\s*:')
-# Fail closed on key forms this text check doesn't model: an explicit key ("? key", in block or
-# flow style; Codex on #12) and an alias used as a key ("*name :"), whose text lives elsewhere.
-UNMODELLED_KEY = re.compile(r"(?:^\s*(?:-\s+)*|[{\[,]\s*)\?(?:\s|$)|" + KEY_START + r"\*\S+\s*:")
-YAML_ESCAPES = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v",
-                "f": "\f", "r": "\r", "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\",
-                "N": "\x85", "_": "\xa0", "L": " ", "P": " "}
-YAML_ESCAPE = re.compile(r"\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)")
-
-
-def yaml_double_quoted(body):
-    """Decode a double-quoted YAML scalar body (YAML 1.2 section 5.7); None for an undefined escape."""
-    def one(m):
-        e = m.group(1)
-        if len(e) > 1:
-            return chr(int(e[1:], 16))
-        if e not in YAML_ESCAPES:
-            raise ValueError(e)
-        return YAML_ESCAPES[e]
-    try:
-        return YAML_ESCAPE.sub(one, body)
-    except ValueError:
-        return None
+# YAML line breaks plus the Unicode ones Python's splitlines() honours: keys are looked for on every
+# piece any of them could start.
+LINE_BREAKS = re.compile(r"[\r\x0b\x0c\x1c-\x1e\x85  ]")
+# The only YAML escapes that can spell a letter (\x, \u, \U in a double-quoted scalar) and an escaped
+# line break, which joins two lines with nothing between them ("hoo\<newline>ks" is hooks).
+LETTER_ESCAPE = re.compile(r"\\(?:[xuU]|$)")
 
 
 def frontmatter_declares_hooks(path):
-    """True if a markdown file's YAML frontmatter has a hooks key, or a key this check can't read.
+    """True if a markdown file's YAML frontmatter could hold a hooks key.
 
     Claude Code runs hooks declared in skill and subagent frontmatter (code.claude.com/docs/en/hooks,
     "Hooks in skills and agents"; the format is the settings one). Lydian keeps no fingerprints for
-    them, so any such key fails: a hook that must exist goes in .claude/settings.json, where it is
-    checked. Text match, not a YAML parse (no third-party dependencies), so it fails closed: keys in
-    any case or indentation, quoted, escaped (a double-quoted unicode escape, Codex on #12), tagged,
-    anchored or in a flow collection count; explicit (?) and alias (*) keys fail outright; an
-    undefined escape fails; frontmatter that never closes is all frontmatter, and "..." doesn't close it. A value that itself
-    contains ", hooks:" is a false positive.
+    them, so any frontmatter that could declare one fails: a hook that must exist goes in
+    .claude/settings.json, where it is checked.
+
+    No YAML parser (no third-party dependencies), so the rule doesn't try to tell keys from values:
+    the frontmatter fails if the word "hooks" appears anywhere in it, in any case, or if it uses an
+    escape that could spell a letter or join two lines. Key-recognition rules kept being bypassed by
+    YAML's other key forms (escaped, explicit "?", flow, tagged; Codex on #12); a key named hooks
+    has to contain those five letters in the raw text unless an escape builds them. The cost: a
+    description that mentions "hooks" fails too, and gets reworded.
+
+    The opening line may carry spaces, but only an exact "---" line (split on "\\n" alone) closes the
+    frontmatter, so no other line break, "--- " line or "..." can end it early for this check while
+    Claude Code reads on. Frontmatter that never closes is all frontmatter.
     """
     resolved = path.resolve()
     if not resolved.is_file():
         raise KitError("a markdown file under .claude is not a regular file")
     text = resolved.read_text(encoding="utf-8", errors="replace").lstrip("﻿")
-    # Lenient where leniency can only add a failure, strict where it could hide a key: the opening
-    # line may carry spaces, but only an exact "---" line (split on "\n" alone) closes the frontmatter,
-    # and keys are looked for on every piece a YAML or Unicode line break could start (Codex on #12).
     lines = [line[:-1] if line.endswith("\r") else line for line in text.split("\n")]
     while lines and not lines[0].strip():
         lines.pop(0)
@@ -269,13 +252,10 @@ def frontmatter_declares_hooks(path):
     for line in lines[1:]:
         if line == "---":
             return False
-        for piece in re.split(r"[\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]", line):
-            if PLAIN_OR_SINGLE_KEY.search(piece) or UNMODELLED_KEY.search(piece):
-                return True
-            for m in DOUBLE_QUOTED_KEY.finditer(piece):
-                key = yaml_double_quoted(m.group(1))
-                if key is None or key.strip().casefold() == "hooks":
-                    return True
+        if "hooks" in line.casefold():
+            return True
+        if any(LETTER_ESCAPE.search(piece) for piece in LINE_BREAKS.split(line)):
+            return True
     return False
 
 
