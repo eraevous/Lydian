@@ -243,7 +243,9 @@ def frontmatter_declares_hooks(path):
     resolved = path.resolve()
     if not resolved.is_file():
         raise KitError("a markdown file under .claude is not a regular file")
-    text = resolved.read_text(encoding="utf-8", errors="replace").lstrip("﻿")
+    # Bytes, not read_text: universal newlines would turn a bare "\r" into a line end and let
+    # "x\r---" pass for the closing line (Copilot on #12).
+    text = resolved.read_bytes().decode("utf-8", errors="replace").lstrip("\ufeff")
     lines = [line[:-1] if line.endswith("\r") else line for line in text.split("\n")]
     while lines and not lines[0].strip():
         lines.pop(0)
