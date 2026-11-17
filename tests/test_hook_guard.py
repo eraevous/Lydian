@@ -268,6 +268,12 @@ class HookGuard(unittest.TestCase):
             "alias key": "---\nname: &h x\n*h : {}\n---\n",
             "flow sequence": "---\nx: [hooks: {}]\n---\n",
             "explicit key, any": '---\n? "x"\n: {}\n---\n',
+            "explicit key in a flow mapping": "---\n{name: x, ? hooks: {Stop: [{? hooks: []}]}}\n---\n",
+            "explicit key in a flow sequence": "---\nx: [? hooks : {}]\n---\n",
+            # The frontmatter must not end early for this check where Claude Code reads on.
+            "NEL before a fake end": "---\nname: x\x85---\nhooks: {}\n---\n",
+            "fake end with trailing space": "---\nname: x\n--- \nhooks: {}\n---\n",
+            "document end marker": "---\nname: x\n...\nhooks: {}\n---\n",
         }
         for label, text in spellings.items():
             with self.subTest(label=label):

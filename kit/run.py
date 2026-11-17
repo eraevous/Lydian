@@ -218,9 +218,9 @@ def repository_commands(root, config, policy):
 KEY_START = r"(?:^\s*(?:-\s+)*|[{\[,]\s*)(?:[!&]\S*\s+)*"
 PLAIN_OR_SINGLE_KEY = re.compile(KEY_START + r"(['\"]?)hooks\1\s*(?::|$)", re.I)
 DOUBLE_QUOTED_KEY = re.compile(KEY_START + r'"((?:[^"\\]|\\.)*)"\s*:')
-# Fail closed on key forms this text check doesn't model: an explicit key ("? key") and an alias
-# used as a key ("*name :"), whose text lives elsewhere.
-UNMODELLED_KEY = re.compile(r"^\s*(?:-\s+)*\?(?:\s|$)|" + KEY_START + r"\*\S+\s*:")
+# Fail closed on key forms this text check doesn't model: an explicit key ("? key", in block or
+# flow style; Codex on #12) and an alias used as a key ("*name :"), whose text lives elsewhere.
+UNMODELLED_KEY = re.compile(r"(?:^\s*(?:-\s+)*|[{\[,]\s*)\?(?:\s|$)|" + KEY_START + r"\*\S+\s*:")
 YAML_ESCAPES = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v",
                 "f": "\f", "r": "\r", "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\",
                 "N": "\x85", "_": "\xa0", "L": " ", "P": " "}
@@ -251,27 +251,31 @@ def frontmatter_declares_hooks(path):
     checked. Text match, not a YAML parse (no third-party dependencies), so it fails closed: keys in
     any case or indentation, quoted, escaped (a double-quoted unicode escape, Codex on #12), tagged,
     anchored or in a flow collection count; explicit (?) and alias (*) keys fail outright; an
-    undefined escape fails; frontmatter that never closes is all frontmatter. A value that itself
+    undefined escape fails; frontmatter that never closes is all frontmatter, and "..." doesn't close it. A value that itself
     contains ", hooks:" is a false positive.
     """
     resolved = path.resolve()
     if not resolved.is_file():
         raise KitError("a markdown file under .claude is not a regular file")
     text = resolved.read_text(encoding="utf-8", errors="replace").lstrip("﻿")
-    lines = text.splitlines()
+    # Lenient where leniency can only add a failure, strict where it could hide a key: the opening
+    # line may carry spaces, but only an exact "---" line (split on "\n" alone) closes the frontmatter,
+    # and keys are looked for on every piece a YAML or Unicode line break could start (Codex on #12).
+    lines = [line[:-1] if line.endswith("\r") else line for line in text.split("\n")]
     while lines and not lines[0].strip():
         lines.pop(0)
     if not lines or lines[0].strip() != "---":
         return False
     for line in lines[1:]:
-        if line.strip() in ("---", "..."):
+        if line == "---":
             return False
-        if PLAIN_OR_SINGLE_KEY.search(line) or UNMODELLED_KEY.search(line):
-            return True
-        for m in DOUBLE_QUOTED_KEY.finditer(line):
-            key = yaml_double_quoted(m.group(1))
-            if key is None or key.strip().casefold() == "hooks":
+        for piece in re.split(r"[\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]", line):
+            if PLAIN_OR_SINGLE_KEY.search(piece) or UNMODELLED_KEY.search(piece):
                 return True
+            for m in DOUBLE_QUOTED_KEY.finditer(piece):
+                key = yaml_double_quoted(m.group(1))
+                if key is None or key.strip().casefold() == "hooks":
+                    return True
     return False
 
 
