@@ -307,6 +307,20 @@ class HookGuard(unittest.TestCase):
                 self.assertEqual(r["gate"], "failed", (label, r))
                 self.assertIn("symlink", r["modules"][0]["reason"])
 
+    def test_submodules_fail(self):
+        # Codex security review on #12: checkout leaves a submodule empty, so a skill a developer
+        # later initializes under .claude is never scanned. Lydian can't see submodule contents.
+        for name, path in ((".gitmodules", ".claude/skills/x"), (".gitmodules", "vendor/lib"),
+                           (".GITMODULES", ".claude")):
+            with self.subTest(name=name, path=path):
+                self.setUp()
+                self.settings(GOOD)
+                (self.repo / name).write_text(f'[submodule "s"]\n\tpath = {path}\n\turl = https://example.invalid/s\n')
+                r = self.run_guard()
+                self.assertEqual(r["gate"], "failed", r)
+                self.assertIn("submodule", r["modules"][0]["reason"])
+                self.assertNotIn("example.invalid", json.dumps(r))
+
     def test_symlink_outside_claude_folders_is_not_this_checks_business(self):
         self.settings(GOOD)
         self.md("docs/a.md", "# a\n")

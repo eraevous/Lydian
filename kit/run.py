@@ -326,6 +326,10 @@ def hook_guard(root, config, policy):
     settings_names = {"settings.json", "settings.local.json"}
     # No symlinks on guarded paths (Codex on #7): a symlinked root .claude points the walk below
     # at a folder whose name isn't checked, and a symlinked settings file can change under the check.
+    # A submodule is an empty folder in CI (checkout doesn't fetch it), so its .claude content,
+    # skills included, is never scanned here; any submodule fails (Codex security review on #12).
+    if any(norm(e.name) == ".gitmodules" for e in root.iterdir()):
+        raise KitError("repository declares git submodules, whose agent settings and skills the guard can't inspect")
     for rel in (".claude", ".claude/settings.json", ".claude/settings.local.json", ".mcp.json"):
         if (root / rel).is_symlink():
             raise KitError("a guarded agent-settings path is a symlink")
