@@ -213,18 +213,46 @@ def repository_commands(root, config, policy):
     return len(commands)
 
 
-# A YAML key named hooks: plain, quoted, explicit (`? hooks`) or inside a flow mapping. Matched on
-# every frontmatter line, any indentation and any case, so a nested or unusual spelling fails closed.
-FRONTMATTER_HOOKS_KEY = re.compile(r"""(^\s*(\?\s*)?|[{,]\s*)(["']?)hooks\3\s*(:|$)""", re.I)
+# Where a YAML mapping key can start: a line (after indentation and any "- " sequence entries) or a
+# flow collection ({ [ ,). Node properties (a !tag or &anchor) may come before the key.
+KEY_START = r"(?:^\s*(?:-\s+)*|[{\[,]\s*)(?:[!&]\S*\s+)*"
+PLAIN_OR_SINGLE_KEY = re.compile(KEY_START + r"(['\"]?)hooks\1\s*(?::|$)", re.I)
+DOUBLE_QUOTED_KEY = re.compile(KEY_START + r'"((?:[^"\\]|\\.)*)"\s*:')
+# Fail closed on key forms this text check doesn't model: an explicit key ("? key") and an alias
+# used as a key ("*name :"), whose text lives elsewhere.
+UNMODELLED_KEY = re.compile(r"^\s*(?:-\s+)*\?(?:\s|$)|" + KEY_START + r"\*\S+\s*:")
+YAML_ESCAPES = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v",
+                "f": "\f", "r": "\r", "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\",
+                "N": "\x85", "_": "\xa0", "L": " ", "P": " "}
+YAML_ESCAPE = re.compile(r"\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)")
+
+
+def yaml_double_quoted(body):
+    """Decode a double-quoted YAML scalar body (YAML 1.2 section 5.7); None for an undefined escape."""
+    def one(m):
+        e = m.group(1)
+        if len(e) > 1:
+            return chr(int(e[1:], 16))
+        if e not in YAML_ESCAPES:
+            raise ValueError(e)
+        return YAML_ESCAPES[e]
+    try:
+        return YAML_ESCAPE.sub(one, body)
+    except ValueError:
+        return None
 
 
 def frontmatter_declares_hooks(path):
-    """True if a markdown file's YAML frontmatter has a hooks key.
+    """True if a markdown file's YAML frontmatter has a hooks key, or a key this check can't read.
 
     Claude Code runs hooks declared in skill and subagent frontmatter (code.claude.com/docs/en/hooks,
     "Hooks in skills and agents"; the format is the settings one). Lydian keeps no fingerprints for
     them, so any such key fails: a hook that must exist goes in .claude/settings.json, where it is
-    checked. Text match, not a YAML parse: frontmatter that never closes is all treated as frontmatter.
+    checked. Text match, not a YAML parse (no third-party dependencies), so it fails closed: keys in
+    any case or indentation, quoted, escaped (a double-quoted unicode escape, Codex on #12), tagged,
+    anchored or in a flow collection count; explicit (?) and alias (*) keys fail outright; an
+    undefined escape fails; frontmatter that never closes is all frontmatter. A value that itself
+    contains ", hooks:" is a false positive.
     """
     resolved = path.resolve()
     if not resolved.is_file():
@@ -238,8 +266,12 @@ def frontmatter_declares_hooks(path):
     for line in lines[1:]:
         if line.strip() in ("---", "..."):
             return False
-        if FRONTMATTER_HOOKS_KEY.search(line):
+        if PLAIN_OR_SINGLE_KEY.search(line) or UNMODELLED_KEY.search(line):
             return True
+        for m in DOUBLE_QUOTED_KEY.finditer(line):
+            key = yaml_double_quoted(m.group(1))
+            if key is None or key.strip().casefold() == "hooks":
+                return True
     return False
 
 
@@ -321,6 +353,12 @@ def hook_guard(root, config, policy):
                 if norm(f) in settings_names and f not in settings_names:
                     raise KitError("repository has a case or trailing-character variant of an agent-settings file")
         in_claude = any(norm(part) == ".claude" for part in here.relative_to(root).parts)
+        # Claude Code follows symlinked skill folders (code.claude.com/docs/en/skills) and os.walk
+        # doesn't descend into them, so no symlink is allowed inside any .claude folder, nor as one
+        # (Codex on #12).
+        for name in dirnames + filenames:
+            if (in_claude or norm(name) == ".claude") and (here / name).is_symlink():
+                raise KitError("a path inside a .claude folder is a symlink")
         for f in filenames:
             if norm(f) == ".mcp.json" and not (at_root and f == ".mcp.json"):
                 raise KitError("repository has an MCP config outside the exact root .mcp.json")

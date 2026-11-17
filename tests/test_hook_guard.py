@@ -256,6 +256,50 @@ class HookGuard(unittest.TestCase):
                 self.setUp()
                 self.assert_frontmatter_hook_fails(".claude/skills/sneaky/SKILL.md", text)
 
+    def test_escaped_or_decorated_hook_keys_fail(self):
+        # Codex on #12: "\u0068ooks" is a valid double-quoted YAML key that decodes to hooks.
+        spellings = {
+            "unicode escape": '---\n"\\u0068ooks":\n  Stop: []\n---\n',
+            "hex escape": '---\n"\\x68ooks": {}\n---\n',
+            "long escape": '---\n"\\U00000068ooks": {}\n---\n',
+            "unknown escape": '---\n"\\qhooks": {}\n---\n',
+            "tag": "---\n!!str hooks: {}\n---\n",
+            "anchor": "---\n&h hooks: {}\n---\n",
+            "alias key": "---\nname: &h x\n*h : {}\n---\n",
+            "flow sequence": "---\nx: [hooks: {}]\n---\n",
+            "explicit key, any": '---\n? "x"\n: {}\n---\n',
+        }
+        for label, text in spellings.items():
+            with self.subTest(label=label):
+                self.setUp()
+                self.assert_frontmatter_hook_fails(".claude/skills/sneaky/SKILL.md", text)
+
+    def test_symlinks_inside_claude_folders_fail(self):
+        # Codex on #12: Claude Code follows a symlinked skill folder, and os.walk doesn't descend into it.
+        cases = {
+            "skill folder": (".claude/skills/x", True),
+            "skill file": (".claude/skills/y/SKILL.md", False),
+            "nested .claude folder": ("pkg/.claude", True),
+        }
+        for label, (rel, is_dir) in cases.items():
+            with self.subTest(label=label):
+                self.setUp()
+                self.settings(GOOD)
+                self.md("payload/SKILL.md", self.FRONTMATTER_HOOK)
+                link = self.repo / rel
+                link.parent.mkdir(parents=True, exist_ok=True)
+                target = self.repo / "payload" if is_dir else self.repo / "payload" / "SKILL.md"
+                link.symlink_to(target, target_is_directory=is_dir)
+                r = self.run_guard()
+                self.assertEqual(r["gate"], "failed", (label, r))
+                self.assertIn("symlink", r["modules"][0]["reason"])
+
+    def test_symlink_outside_claude_folders_is_not_this_checks_business(self):
+        self.settings(GOOD)
+        self.md("docs/a.md", "# a\n")
+        (self.repo / "docs" / "b.md").symlink_to(self.repo / "docs" / "a.md")
+        self.assertEqual(self.run_guard()["gate"], "passed")
+
     def test_skill_without_frontmatter_hooks_passes(self):
         # Decoys: real skills (Telosmith's speckit set), "hooks" in prose or in a value, and a hooks
         # key in the body after the frontmatter closes, which Claude Code doesn't read as config.
