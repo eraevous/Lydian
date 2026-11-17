@@ -208,6 +208,67 @@ class HookGuard(unittest.TestCase):
         (self.repo / ".claude" / "skills" / "x" / "SKILL.md").write_text("# x\n")
         self.assertEqual(self.run_guard()["gate"], "passed")
 
+    # Claude Code also runs hooks declared in skill and subagent frontmatter, in the settings format
+    # (code.claude.com/docs/en/hooks, "Hooks in skills and agents"). A branch could add one beside an
+    # approved settings.json and nothing here fingerprinted it.
+    FRONTMATTER_HOOK = ("---\nname: x\ndescription: d\nhooks:\n  PreToolUse:\n    - matcher: Bash\n"
+                        "      hooks:\n        - type: command\n          command: " + OTHER + "\n---\nbody\n")
+
+    def md(self, rel, text):
+        path = self.repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def assert_frontmatter_hook_fails(self, rel, text):
+        self.settings(GOOD)
+        self.md(rel, text)
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "failed", (rel, r))
+        self.assertIn("frontmatter", r["modules"][0]["reason"])
+        self.assertNotIn("example.invalid", json.dumps(r))
+        self.assertNotIn(rel.split("/")[-2], r["modules"][0]["reason"])
+
+    def test_hook_in_skill_frontmatter_fails(self):
+        self.assert_frontmatter_hook_fails(".claude/skills/sneaky/SKILL.md", self.FRONTMATTER_HOOK)
+
+    def test_hook_in_subagent_or_command_frontmatter_fails(self):
+        for rel in (".claude/agents/sneaky/a.md", ".claude/commands/sneaky/c.md"):
+            with self.subTest(rel=rel):
+                self.setUp()
+                self.assert_frontmatter_hook_fails(rel, self.FRONTMATTER_HOOK)
+
+    def test_hook_in_nested_or_variant_claude_folder_frontmatter_fails(self):
+        for rel in ("pkg/.claude/skills/sneaky/SKILL.md", ".claude/skills/sneaky/skill.MD"):
+            with self.subTest(rel=rel):
+                self.setUp()
+                self.assert_frontmatter_hook_fails(rel, self.FRONTMATTER_HOOK)
+
+    def test_frontmatter_hook_spellings_fail(self):
+        spellings = {
+            "quoted": '---\n"hooks": {}\n---\n',
+            "flow": "---\n{name: x, hooks: {Stop: []}}\n---\n",
+            "spaced key, BOM, CRLF": "﻿---\r\nname: x\r\nhooks :\r\n  Stop: []\r\n---\r\n",
+            "explicit key": "---\n? hooks\n: {}\n---\n",
+            "unclosed": "---\nname: x\nhooks:\n  Stop: []\n",
+        }
+        for label, text in spellings.items():
+            with self.subTest(label=label):
+                self.setUp()
+                self.assert_frontmatter_hook_fails(".claude/skills/sneaky/SKILL.md", text)
+
+    def test_skill_without_frontmatter_hooks_passes(self):
+        # Decoys: real skills (Telosmith's speckit set), "hooks" in prose or in a value, and a hooks
+        # key in the body after the frontmatter closes, which Claude Code doesn't read as config.
+        self.settings(GOOD)
+        self.md(".claude/skills/a/SKILL.md", '---\nname: "speckit-implement"\ndescription: "Run tasks"\n'
+                'metadata:\n  author: "github-spec-kit"\nuser-invocable: true\n---\n\n## Input\n')
+        self.md(".claude/skills/b/SKILL.md", "---\nname: b\ndescription: Manage git hooks: pre-commit and more\n"
+                "tags: [hooks, git]\n---\nhooks:\n  Stop: []\n")
+        self.md(".claude/agents/c.md", "# no frontmatter\nhooks:\n  Stop: []\n")
+        self.md("docs/hooks.md", self.FRONTMATTER_HOOK)   # outside any .claude folder: not loaded as a skill
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "passed", r)
+
     def test_package_folder_match_is_case_insensitive(self):
         # Abigail's probe of 0743ae2: a bare AEC/__init__.py package passed the guard.
         for folder in ("aec", "AEC", "Aec", "aEc", "aec.", "AEC. "):

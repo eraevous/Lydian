@@ -213,6 +213,36 @@ def repository_commands(root, config, policy):
     return len(commands)
 
 
+# A YAML key named hooks: plain, quoted, explicit (`? hooks`) or inside a flow mapping. Matched on
+# every frontmatter line, any indentation and any case, so a nested or unusual spelling fails closed.
+FRONTMATTER_HOOKS_KEY = re.compile(r"""(^\s*(\?\s*)?|[{,]\s*)(["']?)hooks\3\s*(:|$)""", re.I)
+
+
+def frontmatter_declares_hooks(path):
+    """True if a markdown file's YAML frontmatter has a hooks key.
+
+    Claude Code runs hooks declared in skill and subagent frontmatter (code.claude.com/docs/en/hooks,
+    "Hooks in skills and agents"; the format is the settings one). Lydian keeps no fingerprints for
+    them, so any such key fails: a hook that must exist goes in .claude/settings.json, where it is
+    checked. Text match, not a YAML parse: frontmatter that never closes is all treated as frontmatter.
+    """
+    resolved = path.resolve()
+    if not resolved.is_file():
+        raise KitError("a markdown file under .claude is not a regular file")
+    text = resolved.read_text(encoding="utf-8", errors="replace").lstrip("﻿")
+    lines = text.splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if not lines or lines[0].strip() != "---":
+        return False
+    for line in lines[1:]:
+        if line.strip() in ("---", "..."):
+            return False
+        if FRONTMATTER_HOOKS_KEY.search(line):
+            return True
+    return False
+
+
 def hook_guard(root, config, policy):
     """Hold a repository's agent hooks to fingerprints kept centrally (Zach, 2026-11-12).
 
@@ -222,7 +252,9 @@ def hook_guard(root, config, policy):
     a SHA-256 fingerprint listed for that repository (or for every repository, under "*") in the
     central suite. A new or changed hook fails until the owner adds its fingerprint here.
     Every other setting in those files (env, statusLine, helper commands, ...) and a root
-    `.mcp.json` must match fingerprints too; unknown fields in hook entries fail. It also fails if
+    `.mcp.json` must match fingerprints too; unknown fields in hook entries fail. Hooks declared in the
+    frontmatter of a skill, subagent or command file under any `.claude` folder fail outright: the
+    guard keeps no fingerprints for them. It also fails if
     the repository root holds a module file, compiled file or package folder that would shadow a
     module a hook imports (aec, runpy, site, sitecustomize, ...), the trick behind Telosmith#77.
 
@@ -288,9 +320,15 @@ def hook_guard(root, config, policy):
             for f in filenames:
                 if norm(f) in settings_names and f not in settings_names:
                     raise KitError("repository has a case or trailing-character variant of an agent-settings file")
+        in_claude = any(norm(part) == ".claude" for part in here.relative_to(root).parts)
         for f in filenames:
             if norm(f) == ".mcp.json" and not (at_root and f == ".mcp.json"):
                 raise KitError("repository has an MCP config outside the exact root .mcp.json")
+            if in_claude and norm(f).endswith(".md") and frontmatter_declares_hooks(here / f):
+                # The file's path is repository text, so it is not echoed.
+                raise KitError("a skill, subagent or command file under .claude declares hooks in its "
+                               "frontmatter; the guard can't fingerprint those, so declare the hook in "
+                               ".claude/settings.json")
 
     # An MCP config starts programs too (Copilot on #7: anything that changes what runs counts).
     mcp = within(root, ".mcp.json")
