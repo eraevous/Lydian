@@ -208,6 +208,165 @@ class HookGuard(unittest.TestCase):
         (self.repo / ".claude" / "skills" / "x" / "SKILL.md").write_text("# x\n")
         self.assertEqual(self.run_guard()["gate"], "passed")
 
+    # Claude Code also runs hooks declared in skill and subagent frontmatter, in the settings format
+    # (code.claude.com/docs/en/hooks, "Hooks in skills and agents"). A branch could add one beside an
+    # approved settings.json and nothing here fingerprinted it.
+    FRONTMATTER_HOOK = ("---\nname: x\ndescription: d\nhooks:\n  PreToolUse:\n    - matcher: Bash\n"
+                        "      hooks:\n        - type: command\n          command: " + OTHER + "\n---\nbody\n")
+
+    def md(self, rel, text):
+        path = self.repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def assert_frontmatter_hook_fails(self, rel, text):
+        self.settings(GOOD)
+        self.md(rel, text)
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "failed", (rel, r))
+        self.assertIn("frontmatter", r["modules"][0]["reason"])
+        self.assertNotIn("example.invalid", json.dumps(r))
+        self.assertNotIn(rel.split("/")[-2], r["modules"][0]["reason"])
+
+    def test_hook_in_skill_frontmatter_fails(self):
+        self.assert_frontmatter_hook_fails(".claude/skills/sneaky/SKILL.md", self.FRONTMATTER_HOOK)
+
+    def test_hook_in_subagent_or_command_frontmatter_fails(self):
+        for rel in (".claude/agents/sneaky/a.md", ".claude/commands/sneaky/c.md"):
+            with self.subTest(rel=rel):
+                self.setUp()
+                self.assert_frontmatter_hook_fails(rel, self.FRONTMATTER_HOOK)
+
+    def test_hook_in_nested_or_variant_claude_folder_frontmatter_fails(self):
+        for rel in ("pkg/.claude/skills/sneaky/SKILL.md", ".claude/skills/sneaky/skill.MD"):
+            with self.subTest(rel=rel):
+                self.setUp()
+                self.assert_frontmatter_hook_fails(rel, self.FRONTMATTER_HOOK)
+
+    def test_frontmatter_hook_spellings_fail(self):
+        spellings = {
+            "quoted": '---\n"hooks": {}\n---\n',
+            "flow": "---\n{name: x, hooks: {Stop: []}}\n---\n",
+            "spaced key, BOM, CRLF": "﻿---\r\nname: x\r\nhooks :\r\n  Stop: []\r\n---\r\n",
+            "explicit key": "---\n? hooks\n: {}\n---\n",
+            "unclosed": "---\nname: x\nhooks:\n  Stop: []\n",
+        }
+        for label, text in spellings.items():
+            with self.subTest(label=label):
+                self.setUp()
+                self.assert_frontmatter_hook_fails(".claude/skills/sneaky/SKILL.md", text)
+
+    def test_escaped_or_decorated_hook_keys_fail(self):
+        # Codex on #12: "\u0068ooks" is a valid double-quoted YAML key that decodes to hooks.
+        spellings = {
+            "unicode escape": '---\n"\\u0068ooks":\n  Stop: []\n---\n',
+            "hex escape": '---\n"\\x68ooks": {}\n---\n',
+            "long escape": '---\n"\\U00000068ooks": {}\n---\n',
+            "unknown escape": '---\n"\\qhooks": {}\n---\n',
+            "tag": "---\n!!str hooks: {}\n---\n",
+            "anchor": "---\n&h hooks: {}\n---\n",
+            "alias key": "---\nname: &h hooks\n*h : {}\n---\n",
+            "flow sequence": "---\nx: [hooks: {}]\n---\n",
+            "explicit key": '---\n? "hooks"\n: {}\n---\n',
+            "explicit key, no space (Codex on #12)": '---\n{name: x, ?"hooks": {Stop: [{?"hooks": []}]}}\n---\n',
+            "escaped line break": '---\n"hoo\\\n  ks": {}\n---\n',
+            "word in a value (strict by design)": "---\ndescription: Manage git hooks\n---\n",
+            "explicit key in a flow mapping": "---\n{name: x, ? hooks: {Stop: [{? hooks: []}]}}\n---\n",
+            "explicit key in a flow sequence": "---\nx: [? hooks : {}]\n---\n",
+            # The frontmatter must not end early for this check where Claude Code reads on.
+            "NEL before a fake end": "---\nname: x\x85---\nhooks: {}\n---\n",
+            "bare CR before a fake end (Copilot on #12)": "---\nname: x\r---\nhooks: {}\n---\n",
+            "binary-tagged key (Codex security on #12)": "---\n!!binary aG9va3M=: {}\n---\n",
+            "any tag, flow": "---\n{name: x, !foo bar: {}}\n---\n",
+            "non-specific tag": "---\nx: ! y\n---\n",
+            "fake end with trailing space": "---\nname: x\n--- \nhooks: {}\n---\n",
+            "document end marker": "---\nname: x\n...\nhooks: {}\n---\n",
+        }
+        for label, text in spellings.items():
+            with self.subTest(label=label):
+                self.setUp()
+                self.assert_frontmatter_hook_fails(".claude/skills/sneaky/SKILL.md", text)
+
+    def test_symlinks_inside_claude_folders_fail(self):
+        # Codex on #12: Claude Code follows a symlinked skill folder, and os.walk doesn't descend into it.
+        cases = {
+            "skill folder": (".claude/skills/x", True),
+            "skill file": (".claude/skills/y/SKILL.md", False),
+            "nested .claude folder": ("pkg/.claude", True),
+        }
+        for label, (rel, is_dir) in cases.items():
+            with self.subTest(label=label):
+                self.setUp()
+                self.settings(GOOD)
+                self.md("payload/SKILL.md", self.FRONTMATTER_HOOK)
+                link = self.repo / rel
+                link.parent.mkdir(parents=True, exist_ok=True)
+                target = self.repo / "payload" if is_dir else self.repo / "payload" / "SKILL.md"
+                link.symlink_to(target, target_is_directory=is_dir)
+                r = self.run_guard()
+                self.assertEqual(r["gate"], "failed", (label, r))
+                self.assertIn("symlink", r["modules"][0]["reason"])
+
+    def test_lfs_pointers_under_claude_fail(self):
+        # Copilot on #12: CI checks out without LFS, so a hook-bearing SKILL.md committed through
+        # LFS is only a pointer here and materializes on a developer's LFS-enabled checkout.
+        pointer = ("version https://git-lfs.github.com/spec/v1\n"
+                   "oid sha256:" + "0" * 64 + "\nsize 120\n")
+        # Codex security review on #12: git-lfs also accepts noncanonical pointers (a leading blank line,
+        # the legacy hawser URL), so any pointer-like content fails, not only a canonical first line.
+        variants = {"canonical": pointer, "leading blank line": "\n" + pointer,
+                    "legacy URL": pointer.replace("git-lfs.github.com", "hawser.github.com"),
+                    "spaced oid": pointer.replace("oid sha256:", "oid  SHA256:")}
+        cases = [(rel, pointer) for rel in (".claude/skills/x/SKILL.md", ".claude/agents/a.md",
+                                            "pkg/.claude/skills/y/notes.txt")]
+        cases += [(".claude/skills/v/SKILL.md", text) for text in variants.values()]
+        for rel, text in cases:
+            with self.subTest(rel=rel, text=text[:20]):
+                self.setUp()
+                self.settings(GOOD)
+                self.md(rel, text)
+                r = self.run_guard()
+                self.assertEqual(r["gate"], "failed", r)
+                self.assertIn("LFS", r["modules"][0]["reason"])
+        # Decoy: an LFS pointer outside any .claude folder is not this check's business.
+        self.setUp()
+        self.settings(GOOD)
+        self.md("assets/big.bin", pointer)
+        self.assertEqual(self.run_guard()["gate"], "passed")
+
+    def test_submodules_fail(self):
+        # Codex security review on #12: checkout leaves a submodule empty, so a skill a developer
+        # later initializes under .claude is never scanned. Lydian can't see submodule contents.
+        for name, path in ((".gitmodules", ".claude/skills/x"), (".gitmodules", "vendor/lib"),
+                           (".GITMODULES", ".claude")):
+            with self.subTest(name=name, path=path):
+                self.setUp()
+                self.settings(GOOD)
+                (self.repo / name).write_text(f'[submodule "s"]\n\tpath = {path}\n\turl = https://example.invalid/s\n')
+                r = self.run_guard()
+                self.assertEqual(r["gate"], "failed", r)
+                self.assertIn("submodule", r["modules"][0]["reason"])
+                self.assertNotIn("example.invalid", json.dumps(r))
+
+    def test_symlink_outside_claude_folders_is_not_this_checks_business(self):
+        self.settings(GOOD)
+        self.md("docs/a.md", "# a\n")
+        (self.repo / "docs" / "b.md").symlink_to(self.repo / "docs" / "a.md")
+        self.assertEqual(self.run_guard()["gate"], "passed")
+
+    def test_skill_without_frontmatter_hooks_passes(self):
+        # Decoys: real skills (Telosmith's speckit set), "hooks" in prose or in a value, and a hooks
+        # key in the body after the frontmatter closes, which Claude Code doesn't read as config.
+        self.settings(GOOD)
+        self.md(".claude/skills/a/SKILL.md", '---\nname: "speckit-implement"\ndescription: "Run tasks"\n'
+                'metadata:\n  author: "github-spec-kit"\nuser-invocable: true\n---\n\n## Input\n')
+        self.md(".claude/skills/b/SKILL.md", "---\nname: b\ndescription: Manage a git hook! pre-commit and more!\n"
+                "tags: [hook, git, \"\\t\"]\n---\nhooks:\n  Stop: []\n")
+        self.md(".claude/agents/c.md", "# no frontmatter\nhooks:\n  Stop: []\n")
+        self.md("docs/hooks.md", self.FRONTMATTER_HOOK)   # outside any .claude folder: not loaded as a skill
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "passed", r)
+
     def test_package_folder_match_is_case_insensitive(self):
         # Abigail's probe of 0743ae2: a bare AEC/__init__.py package passed the guard.
         for folder in ("aec", "AEC", "Aec", "aEc", "aec.", "AEC. "):

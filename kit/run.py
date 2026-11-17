@@ -213,6 +213,64 @@ def repository_commands(root, config, policy):
     return len(commands)
 
 
+# YAML line breaks plus the Unicode ones Python's splitlines() honours: keys are looked for on every
+# piece any of them could start.
+LINE_BREAKS = re.compile(r"[\r\x0b\x0c\x1c-\x1e\x85  ]")
+# The only YAML escapes that can spell a letter (\x, \u, \U in a double-quoted scalar) and an escaped
+# line break, which joins two lines with nothing between them ("hoo\<newline>ks" is hooks).
+LETTER_ESCAPE = re.compile(r"\\(?:[xuU]|$)")
+# A YAML tag (a "!" starting a token) can construct a key from other text: "!!binary aG9va3M=" is
+# hooks in base64 (Codex security review on #12). Skill frontmatter has no use for tags.
+YAML_TAG = re.compile(r"(?:^|[\s\[\]{},:?-])!")
+
+
+# Anything a Git LFS pointer could contain, anywhere in the file: git-lfs also accepts noncanonical
+# pointers (leading blank lines, the legacy hawser spec URL), so matching byte zero isn't enough
+# (Codex security review on #12). A skill that merely mentions git-lfs fails too.
+LFS_POINTER = re.compile(rb"(?i)git-lfs|hawser|\boid\s+sha256\s*:")
+
+
+def frontmatter_declares_hooks(path):
+    """True if a markdown file's YAML frontmatter could hold a hooks key.
+
+    Claude Code runs hooks declared in skill and subagent frontmatter (code.claude.com/docs/en/hooks,
+    "Hooks in skills and agents"; the format is the settings one). Lydian keeps no fingerprints for
+    them, so any frontmatter that could declare one fails: a hook that must exist goes in
+    .claude/settings.json, where it is checked.
+
+    No YAML parser (no third-party dependencies), so the rule doesn't try to tell keys from values:
+    the frontmatter fails if the word "hooks" appears anywhere in it, in any case, or if it uses an
+    escape that could spell a letter or join two lines, or a YAML tag (which can build a key from
+    other text, as !!binary does). Key-recognition rules kept being bypassed by
+    YAML's other key forms (escaped, explicit "?", flow, tagged; Codex on #12); a key named hooks
+    has to contain those five letters in the raw text unless an escape builds them. The cost: a
+    description that mentions "hooks" fails too, and gets reworded.
+
+    The opening line may carry spaces, but only an exact "---" line (split on "\\n" alone) closes the
+    frontmatter, so no other line break, "--- " line or "..." can end it early for this check while
+    Claude Code reads on. Frontmatter that never closes is all frontmatter.
+    """
+    resolved = path.resolve()
+    if not resolved.is_file():
+        raise KitError("a markdown file under .claude is not a regular file")
+    # Bytes, not read_text: universal newlines would turn a bare "\r" into a line end and let
+    # "x\r---" pass for the closing line (Copilot on #12).
+    text = resolved.read_bytes().decode("utf-8", errors="replace").lstrip("\ufeff")
+    lines = [line[:-1] if line.endswith("\r") else line for line in text.split("\n")]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if not lines or lines[0].strip() != "---":
+        return False
+    for line in lines[1:]:
+        if line == "---":
+            return False
+        if "hooks" in line.casefold():
+            return True
+        if any(LETTER_ESCAPE.search(piece) or YAML_TAG.search(piece) for piece in LINE_BREAKS.split(line)):
+            return True
+    return False
+
+
 def hook_guard(root, config, policy):
     """Hold a repository's agent hooks to fingerprints kept centrally (Zach, 2026-11-12).
 
@@ -222,7 +280,9 @@ def hook_guard(root, config, policy):
     a SHA-256 fingerprint listed for that repository (or for every repository, under "*") in the
     central suite. A new or changed hook fails until the owner adds its fingerprint here.
     Every other setting in those files (env, statusLine, helper commands, ...) and a root
-    `.mcp.json` must match fingerprints too; unknown fields in hook entries fail. It also fails if
+    `.mcp.json` must match fingerprints too; unknown fields in hook entries fail. Hooks declared in the
+    frontmatter of a skill, subagent or command file under any `.claude` folder fail outright: the
+    guard keeps no fingerprints for them. It also fails if
     the repository root holds a module file, compiled file or package folder that would shadow a
     module a hook imports (aec, runpy, site, sitecustomize, ...), the trick behind Telosmith#77.
 
@@ -272,6 +332,10 @@ def hook_guard(root, config, policy):
     settings_names = {"settings.json", "settings.local.json"}
     # No symlinks on guarded paths (Codex on #7): a symlinked root .claude points the walk below
     # at a folder whose name isn't checked, and a symlinked settings file can change under the check.
+    # A submodule is an empty folder in CI (checkout doesn't fetch it), so its .claude content,
+    # skills included, is never scanned here; any submodule fails (Codex security review on #12).
+    if any(norm(e.name) == ".gitmodules" for e in root.iterdir()):
+        raise KitError("repository declares git submodules, whose agent settings and skills the guard can't inspect")
     for rel in (".claude", ".claude/settings.json", ".claude/settings.local.json", ".mcp.json"):
         if (root / rel).is_symlink():
             raise KitError("a guarded agent-settings path is a symlink")
@@ -288,9 +352,27 @@ def hook_guard(root, config, policy):
             for f in filenames:
                 if norm(f) in settings_names and f not in settings_names:
                     raise KitError("repository has a case or trailing-character variant of an agent-settings file")
+        in_claude = any(norm(part) == ".claude" for part in here.relative_to(root).parts)
+        # Claude Code follows symlinked skill folders (code.claude.com/docs/en/skills) and os.walk
+        # doesn't descend into them, so no symlink is allowed inside any .claude folder, nor as one
+        # (Codex on #12).
+        for name in dirnames + filenames:
+            if (in_claude or norm(name) == ".claude") and (here / name).is_symlink():
+                raise KitError("a path inside a .claude folder is a symlink")
         for f in filenames:
             if norm(f) == ".mcp.json" and not (at_root and f == ".mcp.json"):
                 raise KitError("repository has an MCP config outside the exact root .mcp.json")
+            # CI checks out without Git LFS, so a file committed through LFS is only a pointer here and
+            # becomes the real file (a hook-bearing skill, say) on a developer's checkout (Copilot on #12).
+            if in_claude and (here / f).is_file():
+                with open(here / f, "rb") as fh:
+                    if LFS_POINTER.search(fh.read()):
+                        raise KitError("a file under .claude is a Git LFS pointer, whose real contents the guard can't inspect")
+            if in_claude and norm(f).endswith(".md") and frontmatter_declares_hooks(here / f):
+                # The file's path is repository text, so it is not echoed.
+                raise KitError("a skill, subagent or command file under .claude declares hooks in its "
+                               "frontmatter; the guard can't fingerprint those, so declare the hook in "
+                               ".claude/settings.json")
 
     # An MCP config starts programs too (Copilot on #7: anything that changes what runs counts).
     mcp = within(root, ".mcp.json")
