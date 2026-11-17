@@ -275,6 +275,7 @@ class HookGuard(unittest.TestCase):
             "explicit key in a flow sequence": "---\nx: [? hooks : {}]\n---\n",
             # The frontmatter must not end early for this check where Claude Code reads on.
             "NEL before a fake end": "---\nname: x\x85---\nhooks: {}\n---\n",
+            "bare CR before a fake end (Copilot on #12)": "---\nname: x\r---\nhooks: {}\n---\n",
             "fake end with trailing space": "---\nname: x\n--- \nhooks: {}\n---\n",
             "document end marker": "---\nname: x\n...\nhooks: {}\n---\n",
         }
