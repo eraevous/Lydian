@@ -312,11 +312,19 @@ class HookGuard(unittest.TestCase):
         # LFS is only a pointer here and materializes on a developer's LFS-enabled checkout.
         pointer = ("version https://git-lfs.github.com/spec/v1\n"
                    "oid sha256:" + "0" * 64 + "\nsize 120\n")
-        for rel in (".claude/skills/x/SKILL.md", ".claude/agents/a.md", "pkg/.claude/skills/y/notes.txt"):
-            with self.subTest(rel=rel):
+        # Codex security review on #12: git-lfs also accepts noncanonical pointers (a leading blank line,
+        # the legacy hawser URL), so any pointer-like content fails, not only a canonical first line.
+        variants = {"canonical": pointer, "leading blank line": "\n" + pointer,
+                    "legacy URL": pointer.replace("git-lfs.github.com", "hawser.github.com"),
+                    "spaced oid": pointer.replace("oid sha256:", "oid  SHA256:")}
+        cases = [(rel, pointer) for rel in (".claude/skills/x/SKILL.md", ".claude/agents/a.md",
+                                            "pkg/.claude/skills/y/notes.txt")]
+        cases += [(".claude/skills/v/SKILL.md", text) for text in variants.values()]
+        for rel, text in cases:
+            with self.subTest(rel=rel, text=text[:20]):
                 self.setUp()
                 self.settings(GOOD)
-                self.md(rel, pointer)
+                self.md(rel, text)
                 r = self.run_guard()
                 self.assertEqual(r["gate"], "failed", r)
                 self.assertIn("LFS", r["modules"][0]["reason"])

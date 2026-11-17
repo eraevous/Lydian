@@ -224,7 +224,10 @@ LETTER_ESCAPE = re.compile(r"\\(?:[xuU]|$)")
 YAML_TAG = re.compile(r"(?:^|[\s\[\]{},:?-])!")
 
 
-LFS_POINTER = b"version https://git-lfs.github.com/spec/"
+# Anything a Git LFS pointer could contain, anywhere in the file: git-lfs also accepts noncanonical
+# pointers (leading blank lines, the legacy hawser spec URL), so matching byte zero isn't enough
+# (Codex security review on #12). A skill that merely mentions git-lfs fails too.
+LFS_POINTER = re.compile(rb"(?i)git-lfs|hawser|\boid\s+sha256\s*:")
 
 
 def frontmatter_declares_hooks(path):
@@ -363,7 +366,7 @@ def hook_guard(root, config, policy):
             # becomes the real file (a hook-bearing skill, say) on a developer's checkout (Copilot on #12).
             if in_claude and (here / f).is_file():
                 with open(here / f, "rb") as fh:
-                    if fh.read(len(LFS_POINTER)) == LFS_POINTER:
+                    if LFS_POINTER.search(fh.read()):
                         raise KitError("a file under .claude is a Git LFS pointer, whose real contents the guard can't inspect")
             if in_claude and norm(f).endswith(".md") and frontmatter_declares_hooks(here / f):
                 # The file's path is repository text, so it is not echoed.
