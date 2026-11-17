@@ -219,6 +219,9 @@ LINE_BREAKS = re.compile(r"[\r\x0b\x0c\x1c-\x1e\x85  ]")
 # The only YAML escapes that can spell a letter (\x, \u, \U in a double-quoted scalar) and an escaped
 # line break, which joins two lines with nothing between them ("hoo\<newline>ks" is hooks).
 LETTER_ESCAPE = re.compile(r"\\(?:[xuU]|$)")
+# A YAML tag (a "!" starting a token) can construct a key from other text: "!!binary aG9va3M=" is
+# hooks in base64 (Codex security review on #12). Skill frontmatter has no use for tags.
+YAML_TAG = re.compile(r"(?:^|[\s\[\]{},:?-])!")
 
 
 def frontmatter_declares_hooks(path):
@@ -231,7 +234,8 @@ def frontmatter_declares_hooks(path):
 
     No YAML parser (no third-party dependencies), so the rule doesn't try to tell keys from values:
     the frontmatter fails if the word "hooks" appears anywhere in it, in any case, or if it uses an
-    escape that could spell a letter or join two lines. Key-recognition rules kept being bypassed by
+    escape that could spell a letter or join two lines, or a YAML tag (which can build a key from
+    other text, as !!binary does). Key-recognition rules kept being bypassed by
     YAML's other key forms (escaped, explicit "?", flow, tagged; Codex on #12); a key named hooks
     has to contain those five letters in the raw text unless an escape builds them. The cost: a
     description that mentions "hooks" fails too, and gets reworded.
@@ -256,7 +260,7 @@ def frontmatter_declares_hooks(path):
             return False
         if "hooks" in line.casefold():
             return True
-        if any(LETTER_ESCAPE.search(piece) for piece in LINE_BREAKS.split(line)):
+        if any(LETTER_ESCAPE.search(piece) or YAML_TAG.search(piece) for piece in LINE_BREAKS.split(line)):
             return True
     return False
 

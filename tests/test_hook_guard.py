@@ -276,6 +276,9 @@ class HookGuard(unittest.TestCase):
             # The frontmatter must not end early for this check where Claude Code reads on.
             "NEL before a fake end": "---\nname: x\x85---\nhooks: {}\n---\n",
             "bare CR before a fake end (Copilot on #12)": "---\nname: x\r---\nhooks: {}\n---\n",
+            "binary-tagged key (Codex security on #12)": "---\n!!binary aG9va3M=: {}\n---\n",
+            "any tag, flow": "---\n{name: x, !foo bar: {}}\n---\n",
+            "non-specific tag": "---\nx: ! y\n---\n",
             "fake end with trailing space": "---\nname: x\n--- \nhooks: {}\n---\n",
             "document end marker": "---\nname: x\n...\nhooks: {}\n---\n",
         }
@@ -316,7 +319,7 @@ class HookGuard(unittest.TestCase):
         self.settings(GOOD)
         self.md(".claude/skills/a/SKILL.md", '---\nname: "speckit-implement"\ndescription: "Run tasks"\n'
                 'metadata:\n  author: "github-spec-kit"\nuser-invocable: true\n---\n\n## Input\n')
-        self.md(".claude/skills/b/SKILL.md", "---\nname: b\ndescription: Manage a git hook: pre-commit and more\n"
+        self.md(".claude/skills/b/SKILL.md", "---\nname: b\ndescription: Manage a git hook! pre-commit and more!\n"
                 "tags: [hook, git, \"\\t\"]\n---\nhooks:\n  Stop: []\n")
         self.md(".claude/agents/c.md", "# no frontmatter\nhooks:\n  Stop: []\n")
         self.md("docs/hooks.md", self.FRONTMATTER_HOOK)   # outside any .claude folder: not loaded as a skill
