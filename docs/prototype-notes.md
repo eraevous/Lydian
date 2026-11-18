@@ -1,4 +1,20 @@
-# Shared Kairos test kit: local prototype
+# Shared Kairos test kit: local prototype (history)
+
+> **History, not current.** These are the design notes from the local prototype
+> (2026-11-10), kept as written. For how Lydian works now, read the
+> [README](../README.md). What has changed since:
+>
+> - The kit is published as eraevous/Lydian and runs in the Kairos repositories'
+>   CI as `checks / kairos-checks`; "unpublished" and "not installed in any CI"
+>   below no longer hold.
+> - The "one owner decision" at the end (`@v1` or a full SHA) was settled by
+>   DEC-210: callers use `@main`. See the README's Versions section.
+> - `Lydian` is the repository's name, not a placeholder.
+> - The `shared-testkit-prototype/` paths and the `ci-standardize-*` pilot
+>   checkouts in the Run section are the prototype's local layout. Run the kit's
+>   tests as the README shows.
+> - The Telosmith pin lives in `.github/workflows/kairos-checks.yml`, not the SHA
+>   quoted for the pilot below.
 
 This is a bounded, unpublished prototype. It is not installed in any repository's
 CI, and no ruleset, workflow, repository setting, branch or remote file was changed.
