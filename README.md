@@ -52,7 +52,7 @@ Callers use `@main` (DEC-210). A merged change reaches every repository on its n
 
 - In use: the Kairos repositories call it from `.github/workflows/kairos.yml`.
 - Not a sandbox outside GitHub Actions: locally, run it only on reviewed code.
-- Earlier design notes: `docs/prototype-notes.md`.
+- Earlier design notes, kept as history (before DEC-210): `docs/prototype-notes.md`.
 
 ## Running the kit's tests
 
