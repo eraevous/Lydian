@@ -271,6 +271,33 @@ def frontmatter_declares_hooks(path):
     return False
 
 
+def fingerprints_for(mapping, repository):
+    """The fingerprints a suite allows for one repository: those under "*" plus its own entry.
+
+    Repository names compare case-insensitively; `repository` is already lowercased.
+    """
+    allowed = set(mapping.get("*", []))
+    for repo, hashes in mapping.items():
+        if repo != "*" and repo.lower() == repository:
+            allowed |= set(hashes)
+    return allowed
+
+
+def canonical(value):
+    """SHA-256 of a JSON value in canonical form (sorted keys, no spaces): a settings fingerprint."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def norm(name):
+    """A path component as a case-insensitive filesystem may read it.
+
+    macOS and Windows treat `.CLAUDE/settings.local.json` or `.MCP.json` as the real file, and Win32
+    path normalization drops trailing dots and spaces, so `.claude.` may name `.claude` there (handled
+    by string normalization only; not demonstrated on a Windows checkout).
+    """
+    return name.rstrip(". ").casefold()
+
+
 def hook_guard(root, config, policy):
     """Hold a repository's agent hooks to fingerprints kept centrally (Zach, 2026-11-12).
 
@@ -295,10 +322,8 @@ def hook_guard(root, config, policy):
     if not isinstance(allowed_map, dict) or not isinstance(allowed_extras, dict):
         raise KitError("allowed_hook_commands_sha256 and allowed_settings_extras_sha256 must be objects")
     repository = os.environ.get("KAIROS_REPOSITORY", "").lower()
-    allowed = set(allowed_map.get("*", []))
-    for repo, hashes in allowed_map.items():
-        if repo != "*" and repo.lower() == repository:
-            allowed |= set(hashes)
+    allowed = fingerprints_for(allowed_map, repository)
+    extras = fingerprints_for(allowed_extras, repository)
     checked = 0
     # Each name is a module: its .py/.pyc file and its package folder are both blocked
     # (Copilot on #7: sitecustomize/__init__.py imports as surely as sitecustomize.py).
@@ -310,25 +335,13 @@ def hook_guard(root, config, policy):
         for name in names:
             # Case-insensitive like the regex: AEC/ and Aec/ import as aec on case-insensitive filesystems
             # (Abigail's probe of 0743ae2: a bare AEC/__init__.py package passed).
-            if name.rstrip(". ").casefold() == stem.casefold() or importable.fullmatch(name.rstrip(". ")):
+            if norm(name) == stem.casefold() or importable.fullmatch(name.rstrip(". ")):
                 raise KitError(f"repository root has {name!r}, which could shadow a module an agent hook imports")
         checked += 1
-    extras = set(allowed_extras.get("*", []))
-    for repo, hashes in allowed_extras.items():
-        if repo != "*" and repo.lower() == repository:
-            extras |= set(hashes)
 
-    def canonical(value):
-        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-
-    # Aliases of the guarded paths (Codex security review on #7). Case-insensitive filesystems (macOS,
-    # Windows) treat `.CLAUDE/settings.local.json` or `.MCP.json` as the real file. Win32 path
-    # normalization drops trailing dots and spaces, so `.claude.` may name `.claude` there; that is
-    # handled here by string normalization only and has not been demonstrated on a Windows checkout. A session started in a subfolder reads that subfolder's `.claude/` and
-    # `.mcp.json`. So: any spelling of a guarded path other than the exact root one fails, anywhere.
-    def norm(name):
-        return name.rstrip(". ").casefold()
-
+    # Aliases of the guarded paths (Codex security review on #7): see norm(). A session started in a
+    # subfolder reads that subfolder's `.claude/` and `.mcp.json`. So: any spelling of a guarded path
+    # other than the exact root one fails, anywhere.
     settings_names = {"settings.json", "settings.local.json"}
     # No symlinks on guarded paths (Codex on #7): a symlinked root .claude points the walk below
     # at a folder whose name isn't checked, and a symlinked settings file can change under the check.
