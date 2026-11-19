@@ -324,13 +324,22 @@ def hook_guard(root, config, policy):
     repository = os.environ.get("KAIROS_REPOSITORY", "").lower()
     allowed = fingerprints_for(allowed_map, repository)
     extras = fingerprints_for(allowed_extras, repository)
-    checked = 0
+    # Three stages, in this order: root modules a hook could import, the shape of every agent-settings
+    # path in the tree, then the fingerprints of what the root settings files and .mcp.json start.
+    names = [e.name for e in root.iterdir()]
+    checked = guard_root_modules(names, policy.get("forbidden_root_modules", []))
+    guard_agent_paths(root, names)
+    return checked + guard_fingerprints(root, allowed, extras)
+
+
+def guard_root_modules(names, stems):
+    """Fail if a root entry could shadow a module an agent hook imports; one case per stem."""
     # Each name is a module: its .py/.pyc file and its package folder are both blocked
     # (Copilot on #7: sitecustomize/__init__.py imports as surely as sitecustomize.py).
     # Native extensions import too (Copilot on #7: sitecustomize.cpython-311-x86_64-linux-gnu.so),
     # so any root entry named <stem> or <stem>.<...>.<py|pyc|pyo|pyw|so|pyd|dylib> counts.
-    names = [e.name for e in root.iterdir()]
-    for stem in policy.get("forbidden_root_modules", []):
+    checked = 0
+    for stem in stems:
         importable = re.compile(rf"{re.escape(stem)}(\.[^.]+)*\.(py|pyc|pyo|pyw|so|pyd|dylib)", re.I)
         for name in names:
             # Case-insensitive like the regex: AEC/ and Aec/ import as aec on case-insensitive filesystems
@@ -338,7 +347,12 @@ def hook_guard(root, config, policy):
             if norm(name) == stem.casefold() or importable.fullmatch(name.rstrip(". ")):
                 raise KitError(f"repository root has {name!r}, which could shadow a module an agent hook imports")
         checked += 1
+    return checked
 
+
+def guard_agent_paths(root, names):
+    """Fail on any agent-settings path the fingerprint stage wouldn't read: aliases, symlinks,
+    submodules, LFS pointers and frontmatter hooks. Counts no cases."""
     # Aliases of the guarded paths (Codex security review on #7): see norm(). A session started in a
     # subfolder reads that subfolder's `.claude/` and `.mcp.json`. So: any spelling of a guarded path
     # other than the exact root one fails, anywhere.
@@ -347,7 +361,7 @@ def hook_guard(root, config, policy):
     # at a folder whose name isn't checked, and a symlinked settings file can change under the check.
     # A submodule is an empty folder in CI (checkout doesn't fetch it), so its .claude content,
     # skills included, is never scanned here; any submodule fails (Codex security review on #12).
-    if any(norm(e.name) == ".gitmodules" for e in root.iterdir()):
+    if any(norm(name) == ".gitmodules" for name in names):
         raise KitError("repository declares git submodules, whose agent settings and skills the guard can't inspect")
     for rel in (".claude", ".claude/settings.json", ".claude/settings.local.json", ".mcp.json"):
         if (root / rel).is_symlink():
@@ -387,6 +401,14 @@ def hook_guard(root, config, policy):
                                "frontmatter; the guard can't fingerprint those, so declare the hook in "
                                ".claude/settings.json")
 
+
+
+def guard_fingerprints(root, allowed, extras):
+    """Hold the root .mcp.json, every non-hook setting and every hook command to a central fingerprint.
+
+    `allowed` holds hook-command fingerprints, `extras` the rest. Returns the number checked.
+    """
+    checked = 0
     # An MCP config starts programs too (Copilot on #7: anything that changes what runs counts).
     mcp = within(root, ".mcp.json")
     if mcp.is_file():
@@ -480,6 +502,11 @@ MODULES = {"interoperability": interoperability, "modularity": modularity,
            "hook-guard": hook_guard, "telosmith": telosmith}
 
 
+def flag(policy, key):
+    """True only when a module's policy is an object and sets `key` to exactly true (not 1 or "yes")."""
+    return isinstance(policy, dict) and policy.get(key) is True
+
+
 def evaluate(root, adapter, suite):
     root = Path(root).resolve()
     if not isinstance(adapter, dict) or not isinstance(suite, dict):
@@ -502,7 +529,7 @@ def evaluate(root, adapter, suite):
     # A module whose policy says run_first (hook-guard) inspects the checkout before any module
     # runs repository-controlled code, which could otherwise delete what it looks for
     # (Codex P1 and Copilot on Lydian#7). Other modules keep their declared order.
-    ordered = sorted(definitions.items(), key=lambda kv: not (isinstance(kv[1], dict) and kv[1].get("run_first") is True))
+    ordered = sorted(definitions.items(), key=lambda kv: not flag(kv[1], "run_first"))
     # A run_first module is a security preflight: if it doesn't pass, nothing after it runs.
     # The checkout it rejected must never reach repository-controlled code (Abigail's probe of
     # 0743ae2: hook-guard failed and repository-tests still ran). Later modules are reported as
@@ -518,11 +545,11 @@ def evaluate(root, adapter, suite):
             if name not in MODULES:
                 result["status"] = "blocked"
                 raise KitError("central suite names an unknown module")
-            if name not in config and isinstance(policy, dict) and policy.get("optional") is True:
+            if name not in config and flag(policy, "optional"):
                 result["status"] = "not-declared"
                 results.append(result)
                 continue
-            if name not in config and isinstance(policy, dict) and policy.get("adapter_optional") is True:
+            if name not in config and flag(policy, "adapter_optional"):
                 config = dict(config, **{name: {}})
             if name not in config:
                 result["status"] = "blocked"
@@ -534,7 +561,7 @@ def evaluate(root, adapter, suite):
         except (KitError, KeyError, ValueError, TypeError, SyntaxError, OSError) as exc:
             # Do not echo source snippets, process output, or secrets into a shared report.
             result["reason"] = str(exc) if isinstance(exc, KitError) else type(exc).__name__
-        if isinstance(policy, dict) and policy.get("run_first") is True and result["status"] != "passed":
+        if flag(policy, "run_first") and result["status"] != "passed":
             preflight_failed = name
         results.append(result)
     return {"schema": "kairos-testkit/result@1", "kit_version": VERSION,
