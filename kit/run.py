@@ -465,12 +465,49 @@ def guard_fingerprints(root, allowed, extras):
     return checked
 
 
+CODE_IMPACT_LIMIT = 60_000   # characters kept in the job summary (GitHub allows 1 MiB per step)
+
+
+def code_impact(root, prefix, records, edges, tmp, base, timeout):
+    """Telosmith code-impact against the PR base: structural, report-only, never a gate (DEC-256).
+
+    Same terms as the aec.yml it replaces: the base is the merge base of the event's base revision
+    and HEAD; with none, or one that can't be snapshotted, it says it was skipped. The text goes to
+    the job summary through a file the kit's workflow names (KAIROS_CODE_IMPACT_OUT), not into the
+    JSON report. Returns the markdown to write; it never raises for a code-impact problem.
+    """
+    def skipped(why):
+        return f"code-impact skipped: {why}\n"
+    # The base comes from the event (a full SHA), never from the repository; anything else is skipped,
+    # so a value can't be read as a git option or a symbolic ref.
+    if not re.fullmatch(r"[0-9a-f]{40}", base or "") or set(base) == {"0"}:
+        return skipped("no base revision for this event")
+    try:
+        found = command(root, ["git", "merge-base", base, "HEAD"], timeout=timeout)
+        merge_base = found.stdout.strip()
+        if found.returncode or not re.fullmatch(r"[0-9a-f]{40}", merge_base):
+            return skipped("no base revision for this event")
+        before = tmp / "before.jsonl"
+        snap = command(root, prefix + ["snapshot", ".", "--rev", merge_base, "-o", str(before)], timeout=timeout)
+        if snap.returncode:
+            return skipped(f"could not snapshot {merge_base}")
+        ran = command(root, prefix + ["code-impact", str(records), str(before), str(edges)], timeout=timeout)
+    except KitError as exc:
+        return skipped(str(exc))
+    text = (ran.stdout + ran.stderr).strip()
+    if len(text) > CODE_IMPACT_LIMIT:
+        text = text[:CODE_IMPACT_LIMIT] + "\n... (truncated)"
+    return (f"## Telosmith code-impact (structural, report-only) vs {merge_base}\n"
+            f"````\n{text}\n````\n")
+
+
 def telosmith(root, config, policy):
     """Run Telosmith's structural records check from the kit, so no repo copies CI snippets.
 
     The Telosmith source tree comes from the kit's environment (KAIROS_TELOSMITH_SRC, set by
     the kit's workflow after checking out Telosmith at a pinned SHA), never from the consumer.
     Missing records fail unless the central policy says the module is optional for this profile.
+    When the workflow names KAIROS_CODE_IMPACT_OUT, a passing check is followed by code_impact().
     """
     src = os.environ.get("KAIROS_TELOSMITH_SRC", "")
     if not src or not (Path(src) / "aec").is_dir():
@@ -488,8 +525,16 @@ def telosmith(root, config, policy):
             raise KitError("Telosmith could not snapshot structural edges")
         checked = command(root, prefix + ["check", str(records), "--edges", str(edges)],
                           timeout=policy.get("timeout_seconds", 120))
-    if checked.returncode:
-        raise KitError("Telosmith records check reported errors")
+        if checked.returncode:
+            raise KitError("Telosmith records check reported errors")
+        out = os.environ.get("KAIROS_CODE_IMPACT_OUT", "")
+        if out:
+            report = code_impact(root, prefix, records, edges, Path(tmp),
+                                 os.environ.get("KAIROS_BASE_SHA", ""), policy.get("timeout_seconds", 120))
+            try:
+                Path(out).write_text(report, encoding="utf-8")
+            except OSError:
+                pass   # report-only: a summary that can't be written never fails the gate
     count = sum(1 for line in records.read_text(encoding="utf-8").splitlines()
                 if line.strip() and not line.lstrip().startswith("//"))
     if count < 1:
