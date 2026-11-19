@@ -38,7 +38,7 @@ Every check has a case it must flag and a clean decoy it must not (see `tests/`)
 2. Add `.kairos/adapter.json` (copy `examples/consumer_repo/.kairos/adapter.json`, profile `kairos-v1`), and keep at least one record in `.aec/records.jsonl`.
 3. Require the single check `checks / kairos-checks` in the repository's ruleset.
 
-The shared workflow runs with a read-only token, and its checkouts keep no credentials.
+The shared workflow runs with a read-only token, and its checkouts keep no credentials. Its inputs reach the script through environment variables, never as `${{ }}` expressions inside `run:`, and `suite` must be a plain suite name (lowercase letters, digits and hyphens) from Lydian's `suites/`.
 
 ## Versions
 
