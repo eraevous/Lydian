@@ -48,10 +48,14 @@ jobs:
         env:
           KAIROS_TELOSMITH_SRC: ${{ github.workspace }}/telosmith/src
           KAIROS_REPOSITORY: ${{ github.repository }}
+          # Inputs reach the script through env, never as ${{ }} inside run: (script injection).
+          KAIROS_SUITE: ${{ inputs.suite }}
+          KAIROS_ADAPTER: ${{ inputs.adapter }}
         run: |
+          [[ "$KAIROS_SUITE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "suite must name a file in Lydian's suites/" >&2; exit 2; }
           python3 -I -B kit/kit/run.py --repo repo \
-            --adapter "repo/${{ inputs.adapter }}" \
-            --suite "kit/suites/${{ inputs.suite }}.json" | tee report.json
+            --adapter "repo/$KAIROS_ADAPTER" \
+            --suite "kit/suites/$KAIROS_SUITE.json" | tee report.json
       - name: Report in the job summary
         if: always()
         run: |
