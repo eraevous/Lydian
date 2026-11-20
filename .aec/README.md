@@ -1,5 +1,8 @@
 # .aec: purpose and justification records (Telosmith, formerly AEC)
 
+Telosmith is the Kairos requirements-traceability tool: it links purposes to requirements, claims and
+code, and marks a link suspect when what it relies on changes.
+
 - `records.jsonl`: append-only reasoning records (purpose, requirements, claims, evidence, decisions,
   authorities). Never edit a line; append a new version. Vocabulary:
   https://github.com/eraevous/Telosmith/blob/main/docs/reasoning-vocabulary.md
