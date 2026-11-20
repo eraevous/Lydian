@@ -494,6 +494,12 @@ def code_impact(root, prefix, records, edges, tmp, base, timeout):
         ran = command(root, prefix + ["code-impact", str(records), str(before), str(edges)], timeout=timeout)
     except KitError as exc:
         return skipped(str(exc))
+    except UnicodeDecodeError:
+        # A record can hold an escaped lone surrogate the check accepts but stdout can't encode.
+        return skipped("output was not valid UTF-8")
+    if ran.returncode:
+        # Run without --exit-code, so a nonzero exit is an execution error, not detected impact.
+        return skipped(f"Telosmith code-impact exited {ran.returncode}")
     text = (ran.stdout + ran.stderr).strip()
     if len(text) > CODE_IMPACT_LIMIT:
         text = text[:CODE_IMPACT_LIMIT] + "\n... (truncated)"

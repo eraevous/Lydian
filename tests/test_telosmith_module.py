@@ -154,6 +154,37 @@ class CodeImpactTests(unittest.TestCase):
         os.environ["KAIROS_BASE_SHA"] = self.base
         self.assertEqual(self.gate()["gate"], "passed")
 
+    def patch_code_impact_call(self, fake):
+        real = kit.command
+        def command(root, argv, *args, **kwargs):
+            if "code-impact" in argv:
+                return fake(real, root, argv, *args, **kwargs)
+            return real(root, argv, *args, **kwargs)
+        kit.command = command
+        self.addCleanup(setattr, kit, "command", real)
+
+    def test_failed_code_impact_run_is_skipped_not_reported(self):
+        # Without --exit-code a nonzero exit is an execution error, not detected impact (Copilot, #18).
+        self.change_linked_code()
+        os.environ["KAIROS_BASE_SHA"] = self.base
+        def fail(real, root, argv, *args, **kwargs):
+            return real(root, argv[:-3] + ["code-impact", "/nonexistent/records.jsonl", argv[-2], argv[-1]], *args, **kwargs)
+        self.patch_code_impact_call(fail)
+        self.assertEqual(self.gate()["gate"], "passed")
+        text = self.out.read_text()
+        self.assertIn("code-impact skipped: Telosmith code-impact exited", text)
+        self.assertNotIn("## Telosmith code-impact", text)
+
+    def test_undecodable_code_impact_output_does_not_fail_the_gate(self):
+        # A record with an escaped lone surrogate can make output that isn't UTF-8 (Copilot, #18).
+        self.change_linked_code()
+        os.environ["KAIROS_BASE_SHA"] = self.base
+        def undecodable(real, root, argv, *args, **kwargs):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        self.patch_code_impact_call(undecodable)
+        self.assertEqual(self.gate()["gate"], "passed")
+        self.assertIn("code-impact skipped: output was not valid UTF-8", self.out.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
