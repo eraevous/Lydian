@@ -503,8 +503,13 @@ def code_impact(root, prefix, records, edges, tmp, base, timeout):
     text = (ran.stdout + ran.stderr).strip()
     if len(text) > CODE_IMPACT_LIMIT:
         text = text[:CODE_IMPACT_LIMIT] + "\n... (truncated)"
+    # The text quotes repository records verbatim, so it can hold a backtick line that would close a fixed
+    # fence and let the rest render as markdown in the summary. A fence longer than any backtick run in
+    # the text can't be closed from inside (CommonMark: closing needs at least as many backticks).
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(4, longest + 1)
     return (f"## Telosmith code-impact (structural, report-only) vs {merge_base}\n"
-            f"````\n{text}\n````\n")
+            f"{fence}\n{text}\n{fence}\n")
 
 
 def telosmith(root, config, policy):

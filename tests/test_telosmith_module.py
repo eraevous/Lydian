@@ -175,6 +175,46 @@ class CodeImpactTests(unittest.TestCase):
         self.assertIn("code-impact skipped: Telosmith code-impact exited", text)
         self.assertNotIn("## Telosmith code-impact", text)
 
+    def assert_one_fenced_block(self, text):
+        """The report body stays inside one code block: no line between the fences could close it.
+
+        CommonMark: a backtick fence closes on a line of at least as many backticks, indented up to 3 spaces.
+        """
+        lines = text.rstrip("\n").split("\n")
+        opening = lines[1]
+        self.assertRegex(opening, r"^`{4,}$")
+        self.assertEqual(lines[-1], opening)
+        for line in lines[2:-1]:
+            stripped = line.lstrip(" ")
+            run = len(stripped) - len(stripped.lstrip("`"))
+            self.assertFalse(len(line) - len(stripped) <= 3 and run >= len(opening),
+                             f"line {line!r} would close the {opening} fence early")
+
+    def test_record_text_cannot_close_the_summary_fence(self):
+        # Must flag: a record id is repository text that Telosmith prints as-is. One holding a newline and
+        # a four-backtick line closed the fixed ```` fence, so the rest rendered as markdown in the job
+        # summary (a forged "all clear" heading, say). The fence must outrun any backtick run in the text.
+        records = [json.loads(line) for line in (self.repo / ".aec/records.jsonl").read_text().splitlines()]
+        records[1]["id"] = "R1\n````\n## kairos-checks: all clear\n`````"
+        (self.repo / ".aec/records.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+        git(self.repo, "commit", "-qam", "forged id")
+        self.base = git(self.repo, "rev-parse", "HEAD")
+        self.change_linked_code()
+        os.environ["KAIROS_BASE_SHA"] = self.base
+        self.assertEqual(self.gate()["gate"], "passed")
+        text = self.out.read_text()
+        self.assertIn("## kairos-checks: all clear", text, "the record text is still reported, verbatim")
+        self.assert_one_fenced_block(text)
+
+    def test_ordinary_report_keeps_the_four_backtick_fence(self):
+        # Clean decoy: output without backticks keeps the fence it had, and stays in one block.
+        self.change_linked_code()
+        os.environ["KAIROS_BASE_SHA"] = self.base
+        self.assertEqual(self.gate()["gate"], "passed")
+        text = self.out.read_text()
+        self.assertEqual(text.split("\n")[1], "````")
+        self.assert_one_fenced_block(text)
+
     def test_undecodable_code_impact_output_does_not_fail_the_gate(self):
         # A record with an escaped lone surrogate can make output that isn't UTF-8 (Copilot, #18).
         self.change_linked_code()
