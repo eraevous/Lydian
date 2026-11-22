@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -442,6 +443,64 @@ class HookGuard(unittest.TestCase):
             self.assertIn("aec", policy["forbidden_root_modules"])
             self.assertIn("sitecustomize", policy["forbidden_root_modules"])
             self.assertTrue(policy["run_first"])
+
+
+PRODUCTION_SUITES = ("kairos-v1", "kairos-records-v1")
+HOOK_FIXTURES = ROOT / "tests" / "fixtures" / "hooks"
+FINGERPRINT = re.compile(r"`([0-9a-f]{64})`")
+
+
+def production_policy(name):
+    return json.loads((ROOT / "suites" / f"{name}.json").read_text())["modules"]["hook-guard"]
+
+
+class ProductionAllowlist(unittest.TestCase):
+    """Entries in the production suites, held to docs/hook-allowlist.md (steps 4 and 5)."""
+
+    def guard(self, command, name, repo):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".claude").mkdir()
+            hooks = {"PostToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": command}]}]}
+            (Path(tmp) / ".claude" / "settings.json").write_text(json.dumps({"hooks": hooks}))
+            suite = {"schema": 1, "profile": name, "modules": {"hook-guard": production_policy(name)}}
+            adapter = {"schema": 1, "profile": name, "modules": {}}
+            with mock.patch.dict(os.environ, {"KAIROS_REPOSITORY": repo}):
+                return kit.evaluate(Path(tmp), adapter, suite)
+
+    def line_hook_b91f78b(self):
+        # Exact bytes of MtG#59's second hook at 78cc1ab, rendered by Telosmith b91f78b
+        # (`aec init --hooks --hook-style line`); docs/hook-allowlist.md traces it.
+        command = (HOOK_FIXTURES / "telosmith-line-b91f78b.txt").read_bytes().decode("utf-8")
+        self.assertEqual(sha(command), "6a932ff50b8cb633df087ff190346e8700ab0eaebf96f42b0d626fb2e68ea454")
+        return command
+
+    def test_telosmith_line_hook_b91f78b_passes_every_production_suite(self):
+        command = self.line_hook_b91f78b()
+        for name in PRODUCTION_SUITES:
+            for repo in ("eraevous/MtG", "eraevous/anything"):   # under "*": any repository
+                with self.subTest(suite=name, repo=repo):
+                    self.assertEqual(self.guard(command, name, repo)["gate"], "passed")
+
+    def test_line_hook_with_one_byte_changed_fails_every_production_suite(self):
+        command = self.line_hook_b91f78b()
+        decoy = command[:-1] + ("x" if command[-1] != "x" else "y")
+        for name in PRODUCTION_SUITES:
+            with self.subTest(suite=name):
+                r = self.guard(decoy, name, "eraevous/MtG")
+                self.assertEqual(r["gate"], "failed")
+                self.assertIn("not on the central allowlist", r["modules"][0]["reason"])
+
+    def test_every_allowed_fingerprint_has_exactly_one_record_row(self):
+        rows = [FINGERPRINT.search(line).group(1)
+                for line in (ROOT / "docs" / "hook-allowlist.md").read_text(encoding="utf-8").splitlines()
+                if line.startswith("| `") and FINGERPRINT.search(line)]
+        self.assertEqual(len(rows), len(set(rows)), "a fingerprint has two rows")
+        allowed = set()
+        for name in PRODUCTION_SUITES:
+            for prints in production_policy(name)["allowed_hook_commands_sha256"].values():
+                allowed.update(prints)
+        self.assertEqual(allowed - set(rows), set(), "allowed but not recorded in docs/hook-allowlist.md")
+        self.assertEqual(set(rows) - allowed, set(), "recorded but no longer allowed: remove its row")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,23 @@
+P="$CLAUDE_PROJECT_DIR"; cd "$P" || exit 0; cd / && pp=$(python3 -I -c "import os,sys; b=os.path.realpath(sys.argv[1]); p=os.path.join(b,''); r=lambda a: os.path.join(os.path.realpath(a),''); print(os.pathsep.join(a for a in (e if os.path.isabs(e) else os.path.realpath(os.path.join(b,e)) for e in os.environ.get('PYTHONPATH','').split(os.pathsep) if e) if os.pathsep not in a and not r(a).startswith(p) and not p.startswith(r(a))))" "$P") || exit 1; python3 -I -B -c "import sys,os,json,re,runpy,site,importlib.util as u,importlib.metadata as m
+P=os.path.realpath(sys.argv[1]);S=os.sep
+def no(t):print('Telosmith hook: '+t,file=sys.stderr);sys.exit(1)
+f=os.path.join(P,'tools','aec_upstream.json')
+try:c=json.load(open(f)) if os.path.isfile(f) and not os.path.islink(f) else {};c=c.get('commit')
+except Exception:c=None
+if not(isinstance(c,str) and re.fullmatch('[0-9a-f]{40}',c)):no(f+' names no full commit; the line hook runs only the aec your CI pins there')
+U=site.getusersitepackages()
+if not os.environ.get('PYTHONNOUSERSITE') and sys.prefix==sys.base_prefix and os.path.isdir(U):G=set(site.getsitepackages());sys.path.insert(next((i for i,x in enumerate(sys.path) if x in G),len(sys.path)),U)
+sys.path+=[a for a in sys.argv[2].split(os.pathsep) if a]
+s=u.find_spec('aec');o=s and s.origin
+if not o:no('no aec is importable here; install Telosmith at the commit your CI job pins (pip install git+https://github.com/eraevous/Telosmith.git@'+c+')')
+L=os.path.realpath(os.path.dirname(o))
+d=[x for x in m.distributions(name='telosmith') if os.path.realpath(x.locate_file('aec'))==L]
+try:v=json.loads(d[0].read_text('direct_url.json'))
+except Exception:v={}
+D=lambda x:x if isinstance(x,dict) else {}
+v=D(v);g=D(v.get('vcs_info'));t=v.get('dir_info',{})
+if (L+S).startswith(P+S) or not isinstance(t,dict) or t.get('editable') or g.get('vcs')!='git' or g.get('commit_id')!=c:no('the aec at '+L+' is not a non-editable pip install from git of the pinned commit '+c[:12]+' (tools/aec_upstream.json; installed: '+str(g.get('commit_id') or 'no git commit')[:12]+'); install it with pip install git+https://github.com/eraevous/Telosmith.git@'+c)
+a=sys.modules['aec']=u.module_from_spec(s)
+try:s.loader.exec_module(a);import aec.userhook as h;h.project_run
+except Exception:no('the pinned aec has no hook project; pin Telosmith 0.6.0 or later, or go back to the inline hook: aec init --hooks --hook-style inline')
+sys.argv=['aec','hook','project',P];runpy.run_module('aec',run_name='__main__',alter_sys=True)" "$P" "$pp"
