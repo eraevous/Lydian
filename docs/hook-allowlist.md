@@ -35,7 +35,9 @@ PYTHONPATH=/tmp/ts/src python3 -m aec init --hooks --hook-style <line|inline> .
 
 The rendered fingerprint must equal step 1's. Run Telosmith only from Zach's own repository at the pinned commit; installing anything from elsewhere needs his approval first (lane rules §17).
 
-If they differ, name every differing byte and explain it (a local edit, a different `--hook-style`, a different commit). If the difference can't be explained, or the hook has no source that renders it, **stop**: don't add the fingerprint. Report the difference to the repository's owner lane and to Zach instead.
+If they differ, **stop**: don't add the fingerprint. An explanation doesn't satisfy this step, even a true one (a local edit, a different `--hook-style`, a render from another commit): the allowlist may hold only what the caller's pinned source produces. Name the differing bytes and report them to the repository's owner lane, who fixes the cause: re-render the hook at the pin, or move the pin in its own PR. Then repeat steps 1 and 2 until the two fingerprints match.
+
+A hook written by hand for one repository has no render to compare with. It can only be scoped to that repository (step 3), and its exact text goes in the record's fixture (step 4) so that the reviewer reads what will run.
 
 ### 3. Scope
 
@@ -46,7 +48,13 @@ Say which, and why, in the PR body. Add the fingerprint to both production suite
 
 ### 4. Record
 
-JSON has no comments, so the record lives in the table at the end of this file, one row per fingerprint, in the same PR as the entry: the fingerprint, its scope, the source (repository and commit it was rendered from), the PR it serves, the date, and "approved by merge (Zach)". `tests/test_hook_guard.py` fails if a fingerprint in either production suite has no row here.
+JSON has no comments, so the record lives in the table at the end of this file, one row per fingerprint, in the same PR as the entry: the fingerprint, its scope, the source (repository and commit it was rendered from, or the PR that wrote it by hand), the hook's exact text as a fixture file under `tests/fixtures/hooks/`, the PR it serves, the date, and "approved by merge (Zach)".
+
+`tests/test_hook_guard.py` enforces what it can:
+- every fingerprint in either production suite has exactly one row, and every row has an entry;
+- every row added under this protocol names a source commit, and a fixture whose bytes hash to the row's fingerprint.
+
+It can't re-render the hook (CI has no Telosmith at every caller's pin), so the step 2 comparison stays the author's evidence in the PR body, and the reviewer checks it. Rows that predate this file have no fixture and are listed in the test; that list may only shrink.
 
 ### 5. Test
 
@@ -86,13 +94,13 @@ A fingerprint taken from a PR head that later moved is obsolete: allow the finge
 
 Rows for entries added before this file existed were reconstructed on 2026-11-22 from the commits and PRs that added them. "In use" is from each caller's default branch that day.
 
-| Fingerprint | Scope | Source | Added in | Date merged | In use (2026-11-22) | Approval |
-| --- | --- | --- | --- | --- | --- | --- |
-| `c044525e192a71af29609b04621141db6b9464fe896effc892895c6f3b9d51ca` | eraevous/MtG | seeded from MtG's own hook as it stood | #7 | 2026-11-12 | MtG | approved by merge (Zach) |
-| `c1b556106e40066c153423a0761a11313c0af0ab1a8d0ff1b0cce7c57d42a7fb` | eraevous/Telosmith | seeded from Telosmith's own repository hook | #7 | 2026-11-12 | Telosmith | approved by merge (Zach) |
-| `5bd1822b388c63f2cedbda2118d17cbaf4574feddacf8dd04376263a5e639e29` | `"*"` and eraevous/crank-mem-eval | Telosmith v3 hook snippet, seeded for every repository | #7 | 2026-11-12 | crank-mem-eval | approved by merge (Zach) |
-| `3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc` | eraevous/kairos-infra | seeded from the hook several repositories used then; the others' entries were dropped in #10 | #7 | 2026-11-12 | none on main | approved by merge (Zach) |
-| `cb8eaebeb5becbf1c2363d3a465d8f2189da380877a716a77afb47372545d3fb` | `"*"` | Telosmith hook (Telosmith#77 at `6b737b6`) | #9 | 2026-11-14 | none on main | approved by merge (Zach) |
-| `e019ae40b515a54546c2e53699bca6863e6568da534264afd4bbc2d744719896` | `"*"` | Telosmith main inline hook | #10 | 2026-11-15 | 11 repositories | approved by merge (Zach) |
-| `599883c23c35ff4f4a2e45b4d6ec499c24bddb2e4e2a98d16bb383e71b4622d5` | `"*"` | Telosmith main inline hook after Telosmith#87 | #13 | 2026-11-17 | none on main | approved by merge (Zach) |
-| `6a932ff50b8cb633df087ff190346e8700ab0eaebf96f42b0d626fb2e68ea454` | `"*"` | Telosmith line launcher, `aec init --hook-style line` at `b91f78b` (traced byte-identical 2026-11-22) | #20, for MtG#59 | 2026-11-22 | MtG | approved by merge (Zach) |
+| Fingerprint | Scope | Source | Fixture | Added in | Date merged | In use (2026-11-22) | Approval |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `c044525e192a71af29609b04621141db6b9464fe896effc892895c6f3b9d51ca` | eraevous/MtG | seeded from MtG's own hook as it stood | none (predates this file) | #7 | 2026-11-12 | MtG | approved by merge (Zach) |
+| `c1b556106e40066c153423a0761a11313c0af0ab1a8d0ff1b0cce7c57d42a7fb` | eraevous/Telosmith | seeded from Telosmith's own repository hook | none (predates this file) | #7 | 2026-11-12 | Telosmith | approved by merge (Zach) |
+| `5bd1822b388c63f2cedbda2118d17cbaf4574feddacf8dd04376263a5e639e29` | `"*"` and eraevous/crank-mem-eval | Telosmith v3 hook snippet, seeded for every repository | none (predates this file) | #7 | 2026-11-12 | crank-mem-eval | approved by merge (Zach) |
+| `3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc` | eraevous/kairos-infra | seeded from the hook several repositories used then; the others' entries were dropped in #10 | none (predates this file) | #7 | 2026-11-12 | none on main | approved by merge (Zach) |
+| `cb8eaebeb5becbf1c2363d3a465d8f2189da380877a716a77afb47372545d3fb` | `"*"` | Telosmith hook (Telosmith#77 at `6b737b6`) | none (predates this file) | #9 | 2026-11-14 | none on main | approved by merge (Zach) |
+| `e019ae40b515a54546c2e53699bca6863e6568da534264afd4bbc2d744719896` | `"*"` | Telosmith main inline hook | none (predates this file) | #10 | 2026-11-15 | 11 repositories | approved by merge (Zach) |
+| `599883c23c35ff4f4a2e45b4d6ec499c24bddb2e4e2a98d16bb383e71b4622d5` | `"*"` | Telosmith main inline hook after Telosmith#87 | none (predates this file) | #13 | 2026-11-17 | none on main | approved by merge (Zach) |
+| `6a932ff50b8cb633df087ff190346e8700ab0eaebf96f42b0d626fb2e68ea454` | `"*"` | Telosmith line launcher, `aec init --hook-style line` at `b91f78b` (traced byte-identical 2026-11-22) | `telosmith-line-b91f78b.txt` | #20, for MtG#59 | 2026-11-22 | MtG | approved by merge (Zach) |

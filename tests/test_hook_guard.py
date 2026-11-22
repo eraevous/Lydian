@@ -448,6 +448,17 @@ class HookGuard(unittest.TestCase):
 PRODUCTION_SUITES = ("kairos-v1", "kairos-records-v1")
 HOOK_FIXTURES = ROOT / "tests" / "fixtures" / "hooks"
 FINGERPRINT = re.compile(r"`([0-9a-f]{64})`")
+# Rows recorded before docs/hook-allowlist.md existed (#7, #9, #10, #13), reconstructed without a
+# fixture. This set may only shrink (protocol step 7); every other row must be traceable.
+PRE_PROTOCOL_ROWS = frozenset({
+    "c044525e192a71af29609b04621141db6b9464fe896effc892895c6f3b9d51ca",
+    "c1b556106e40066c153423a0761a11313c0af0ab1a8d0ff1b0cce7c57d42a7fb",
+    "5bd1822b388c63f2cedbda2118d17cbaf4574feddacf8dd04376263a5e639e29",
+    "3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc",
+    "cb8eaebeb5becbf1c2363d3a465d8f2189da380877a716a77afb47372545d3fb",
+    "e019ae40b515a54546c2e53699bca6863e6568da534264afd4bbc2d744719896",
+    "599883c23c35ff4f4a2e45b4d6ec499c24bddb2e4e2a98d16bb383e71b4622d5",
+})
 
 
 def production_policy(name):
@@ -490,18 +501,73 @@ class ProductionAllowlist(unittest.TestCase):
                 self.assertEqual(r["gate"], "failed")
                 self.assertIn("not on the central allowlist", r["modules"][0]["reason"])
 
-    def test_every_allowed_fingerprint_has_exactly_one_record_row(self):
-        rows = [FINGERPRINT.search(line).group(1)
-                for line in (ROOT / "docs" / "hook-allowlist.md").read_text(encoding="utf-8").splitlines()
-                if line.startswith("| `") and FINGERPRINT.search(line)]
-        self.assertEqual(len(rows), len(set(rows)), "a fingerprint has two rows")
+    def record_rows(self, text):
+        """{fingerprint: (source, fixture)} from the table in docs/hook-allowlist.md."""
+        rows = {}
+        for line in text.splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            m = FINGERPRINT.fullmatch(cells[0]) if line.startswith("| `") else None
+            if not m:
+                continue
+            self.assertNotIn(m.group(1), rows, "a fingerprint has two rows")
+            self.assertGreaterEqual(len(cells), 4, f"row {m.group(1)[:12]} has too few cells")
+            rows[m.group(1)] = (cells[2], cells[3])
+        return rows
+
+    def record_problems(self, rows):
+        """What's wrong with the record rows, against both production suites."""
+        problems = []
         allowed = set()
         for name in PRODUCTION_SUITES:
             for prints in production_policy(name)["allowed_hook_commands_sha256"].values():
                 allowed.update(prints)
-        self.assertEqual(allowed - set(rows), set(), "allowed but not recorded in docs/hook-allowlist.md")
-        self.assertEqual(set(rows) - allowed, set(), "recorded but no longer allowed: remove its row")
+        problems += [f"{f[:12]} allowed but not recorded" for f in sorted(allowed - set(rows))]
+        problems += [f"{f[:12]} recorded but no longer allowed: remove its row" for f in sorted(set(rows) - allowed)]
+        for fingerprint, (source, fixture) in sorted(rows.items()):
+            if fingerprint in PRE_PROTOCOL_ROWS:
+                continue
+            # Codex on #24: a fingerprint-only row must not pass. A row added under the protocol
+            # names its source commit and the hook's exact text, whose bytes hash to the row.
+            if not re.search(r"\b[0-9a-f]{7,40}\b", source):
+                problems.append(f"{fingerprint[:12]} names no source commit")
+            name = re.fullmatch(r"`([A-Za-z0-9._-]+)`", fixture)
+            path = HOOK_FIXTURES / name.group(1) if name else None
+            if path is None or not path.is_file():
+                problems.append(f"{fingerprint[:12]} names no fixture file in tests/fixtures/hooks/")
+            elif hashlib.sha256(path.read_bytes()).hexdigest() != fingerprint:
+                problems.append(f"{fingerprint[:12]} fixture's bytes hash to something else")
+        return problems
 
+    def test_every_allowed_fingerprint_has_one_traceable_record_row(self):
+        rows = self.record_rows((ROOT / "docs" / "hook-allowlist.md").read_text(encoding="utf-8"))
+        self.assertEqual(self.record_problems(rows), [])
+
+    def test_pre_protocol_list_only_shrinks(self):
+        # Rows added before docs/hook-allowlist.md existed carry no fixture. No new name joins them.
+        self.assertLessEqual(len(PRE_PROTOCOL_ROWS), 7)
+
+    def test_fingerprint_only_row_fails_records_check(self):
+        # Codex's reproduction on #24: allow `echo unrendered-hook` and add a row with nothing but it.
+        fingerprint = sha("echo unrendered-hook")
+        text = (ROOT / "docs" / "hook-allowlist.md").read_text(encoding="utf-8")
+        text += f"\n| `{fingerprint}` | `\"*\"` | | | | | | |\n"
+        rows = self.record_rows(text)
+        policies = {n: production_policy(n) for n in PRODUCTION_SUITES}
+        for policy in policies.values():
+            policy["allowed_hook_commands_sha256"]["*"].append(fingerprint)
+        with mock.patch(f"{__name__}.production_policy", lambda n: policies[n]):
+            problems = self.record_problems(rows)
+        self.assertIn(f"{fingerprint[:12]} names no source commit", problems)
+        self.assertIn(f"{fingerprint[:12]} names no fixture file in tests/fixtures/hooks/", problems)
+
+    def test_fixture_that_hashes_elsewhere_fails_records_check(self):
+        rows = self.record_rows((ROOT / "docs" / "hook-allowlist.md").read_text(encoding="utf-8"))
+        target = "6a932ff50b8cb633df087ff190346e8700ab0eaebf96f42b0d626fb2e68ea454"
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "telosmith-line-b91f78b.txt").write_text("echo not the hook")
+            with mock.patch(f"{__name__}.HOOK_FIXTURES", Path(tmp)):
+                problems = self.record_problems(rows)
+        self.assertIn(f"{target[:12]} fixture's bytes hash to something else", problems)
 
 if __name__ == "__main__":
     unittest.main()
