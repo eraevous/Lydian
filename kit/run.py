@@ -1,7 +1,13 @@
-"""Local prototype: run a centrally owned suite against one repository adapter.
+"""Run a central Lydian suite against one repository's adapter and print a JSON report.
+
+The shared kairos-checks workflow runs this for every calling repository: the suite (suites/*.json)
+names the modules and their policy; the repository's .kairos/adapter.json only says how it differs.
+Exit 0 when the gate passes, 1 otherwise.
 
 This runs repository code. It is not a sandbox and must not receive secrets.
 No network, git writes, installation, or publishing is performed by this runner.
+The report's "scope": "local-prototype" and kit_version are report fields callers may read, kept
+as they are; they don't describe where the kit runs.
 """
 import argparse
 import ast
@@ -119,7 +125,8 @@ def repository_tests(root, config, policy):
     """Use unittest itself, with a central zero-test and skip policy, not log matching."""
     start = within(root, config["directory"])
     source = within(root, config.get("source", "."))
-    if not isinstance(policy.get("allow_skips", False), bool):
+    allow_skips = policy.get("allow_skips", False)
+    if not isinstance(allow_skips, bool):
         raise KitError("allow_skips must be a boolean")
     # Each allowed skip is scoped to named repositories and carries a reason. The repository
     # identity comes from KAIROS_REPOSITORY, which the shared workflow sets from github.repository
@@ -158,7 +165,7 @@ sys.exit(0 if result.wasSuccessful() else 1)
     run, skipped, completed = summary["run"], summary["skipped"], summary["completed"]
     if not summary["success"] or run < 1 or completed < 1:
         raise KitError("no executed passing unit tests")
-    if skipped and not policy.get("allow_skips", False):
+    if skipped and not allow_skips:
         # A skip passes only when the central suite names its reason (e.g. an optional external CLI).
         # Consumers can't add reasons: the allowlist lives in the central suite, not the adapter.
         reasons = summary.get("skip_reasons", [])
@@ -402,7 +409,6 @@ def guard_agent_paths(root, names):
                                ".claude/settings.json")
 
 
-
 def guard_fingerprints(root, allowed, extras):
     """Hold the root .mcp.json, every non-hook setting and every hook command to a central fingerprint.
 
@@ -521,22 +527,22 @@ def telosmith(root, config, policy):
     records = within(root, config.get("records", ".aec/records.jsonl"))
     if not records.is_file():
         raise KitError("repository has no Telosmith records")
+    timeout = policy.get("timeout_seconds", 120)
     prefix = ["{python}", "-I", "-B", "-c",
               "import sys, runpy; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module('aec', run_name='__main__')",
               str(Path(src).resolve())]
     with tempfile.TemporaryDirectory(prefix="kit-edges-") as tmp:
         edges = Path(tmp) / "edges.jsonl"
-        made = command(root, prefix + ["edges", ".", "-o", str(edges)], timeout=policy.get("timeout_seconds", 120))
+        made = command(root, prefix + ["edges", ".", "-o", str(edges)], timeout=timeout)
         if made.returncode:
             raise KitError("Telosmith could not snapshot structural edges")
-        checked = command(root, prefix + ["check", str(records), "--edges", str(edges)],
-                          timeout=policy.get("timeout_seconds", 120))
+        checked = command(root, prefix + ["check", str(records), "--edges", str(edges)], timeout=timeout)
         if checked.returncode:
             raise KitError("Telosmith records check reported errors")
         out = os.environ.get("KAIROS_CODE_IMPACT_OUT", "")
         if out:
             report = code_impact(root, prefix, records, edges, Path(tmp),
-                                 os.environ.get("KAIROS_BASE_SHA", ""), policy.get("timeout_seconds", 120))
+                                 os.environ.get("KAIROS_BASE_SHA", ""), timeout)
             try:
                 Path(out).write_text(report, encoding="utf-8")
             except OSError:
