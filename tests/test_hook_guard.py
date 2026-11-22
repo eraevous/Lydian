@@ -461,6 +461,25 @@ PRE_PROTOCOL_ROWS = frozenset({
 })
 
 
+# The seven identities PRE_PROTOCOL_ROWS started with (2026-11-22). The exemption set may lose
+# members (protocol step 7) but never gain or swap one; a reviewer of any change to this tuple or
+# to PRE_PROTOCOL_ROWS should ask why.
+LEGACY_IDENTITIES = (
+    "c044525e192a71af29609b04621141db6b9464fe896effc892895c6f3b9d51ca",
+    "c1b556106e40066c153423a0761a11313c0af0ab1a8d0ff1b0cce7c57d42a7fb",
+    "5bd1822b388c63f2cedbda2118d17cbaf4574feddacf8dd04376263a5e639e29",
+    "3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc",
+    "cb8eaebeb5becbf1c2363d3a465d8f2189da380877a716a77afb47372545d3fb",
+    "e019ae40b515a54546c2e53699bca6863e6568da534264afd4bbc2d744719896",
+    "599883c23c35ff4f4a2e45b4d6ec499c24bddb2e4e2a98d16bb383e71b4622d5",
+)
+
+
+def pre_protocol_problems(exempt):
+    """Exempt fingerprints that aren't among the original legacy identities."""
+    return [f"{f[:12]} is not one of the legacy rows" for f in sorted(set(exempt) - set(LEGACY_IDENTITIES))]
+
+
 def production_policy(name):
     return json.loads((ROOT / "suites" / f"{name}.json").read_text())["modules"]["hook-guard"]
 
@@ -544,7 +563,15 @@ class ProductionAllowlist(unittest.TestCase):
 
     def test_pre_protocol_list_only_shrinks(self):
         # Rows added before docs/hook-allowlist.md existed carry no fixture. No new name joins them.
-        self.assertLessEqual(len(PRE_PROTOCOL_ROWS), 7)
+        self.assertEqual(pre_protocol_problems(PRE_PROTOCOL_ROWS), [])
+
+    def test_swapped_pre_protocol_entry_fails(self):
+        # Codex security review on #24 (0e8d547): a count-only check let an untraced digest
+        # replace a legacy one in the exemption set and skip the source and fixture checks.
+        swapped = (PRE_PROTOCOL_ROWS - {min(PRE_PROTOCOL_ROWS)}) | {sha("echo unrendered-swap")}
+        self.assertEqual(len(swapped), len(PRE_PROTOCOL_ROWS))
+        self.assertEqual(pre_protocol_problems(swapped),
+                         [f"{sha('echo unrendered-swap')[:12]} is not one of the legacy rows"])
 
     def test_fingerprint_only_row_fails_records_check(self):
         # Codex's reproduction on #24: allow `echo unrendered-hook` and add a row with nothing but it.
