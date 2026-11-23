@@ -76,14 +76,26 @@ class ProductionSuiteTests(unittest.TestCase):
 HOOK_GUARD_SUITES = ("kairos-v1", "kairos-records-v1")
 
 
+_ABSENT = object()
+
+
+def _same_json(a, b):
+    # Compare as JSON text, not Python values: True == 1 in Python, but the kit's flag() needs `is True`,
+    # and an absent key is not the same as an explicit null (Codex review on #25).
+    if a is _ABSENT or b is _ABSENT:
+        return a is b
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
 def hook_guard_differences(first, second):
     """Keys of the `hook-guard` block where two suites differ, with the repository for fingerprints."""
     found = []
     for key in sorted(set(first) | set(second)):
-        a, b = first.get(key), second.get(key)
+        a, b = first.get(key, _ABSENT), second.get(key, _ABSENT)
         if key == "allowed_hook_commands_sha256" and isinstance(a, dict) and isinstance(b, dict):
-            found += [f"{key}[{repo}]" for repo in sorted(set(a) | set(b)) if a.get(repo) != b.get(repo)]
-        elif a != b:
+            found += [f"{key}[{repo}]" for repo in sorted(set(a) | set(b))
+                      if not _same_json(a.get(repo, _ABSENT), b.get(repo, _ABSENT))]
+        elif not _same_json(a, b):
             found.append(key)
     return found
 
@@ -120,6 +132,17 @@ class HookGuardSuitesAgree(unittest.TestCase):
         second["forbidden_root_modules"].remove("sitecustomize")
         second["run_first"] = False
         self.assertEqual(hook_guard_differences(first, second), ["forbidden_root_modules", "run_first"])
+
+    def test_json_type_and_key_presence_differences_are_flagged(self):
+        # Python equality would miss each of these (Codex review on #25).
+        first = self.block(HOOK_GUARD_SUITES[0])
+        second = json.loads(json.dumps(first))
+        second["run_first"] = 1
+        second["adapter_optional"] = None
+        del first["adapter_optional"]
+        second["allowed_hook_commands_sha256"]["eraevous/Example"] = None
+        self.assertEqual(hook_guard_differences(first, second),
+                         ["adapter_optional", "allowed_hook_commands_sha256[eraevous/Example]", "run_first"])
 
     def test_identical_copy_is_not_flagged(self):
         # Clean decoy: a separate but equal copy (what the two suite files hold today) passes.
