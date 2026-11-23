@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -443,6 +444,157 @@ class HookGuard(unittest.TestCase):
             self.assertIn("sitecustomize", policy["forbidden_root_modules"])
             self.assertTrue(policy["run_first"])
 
+
+PRODUCTION_SUITES = ("kairos-v1", "kairos-records-v1")
+HOOK_FIXTURES = ROOT / "tests" / "fixtures" / "hooks"
+FINGERPRINT = re.compile(r"`([0-9a-f]{64})`")
+# Rows recorded before docs/hook-allowlist.md existed (#7, #9, #10, #13), reconstructed without a
+# fixture. This set may only shrink (protocol step 7); every other row must be traceable.
+PRE_PROTOCOL_ROWS = frozenset({
+    "c044525e192a71af29609b04621141db6b9464fe896effc892895c6f3b9d51ca",
+    "c1b556106e40066c153423a0761a11313c0af0ab1a8d0ff1b0cce7c57d42a7fb",
+    "5bd1822b388c63f2cedbda2118d17cbaf4574feddacf8dd04376263a5e639e29",
+    "3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc",
+    "cb8eaebeb5becbf1c2363d3a465d8f2189da380877a716a77afb47372545d3fb",
+    "e019ae40b515a54546c2e53699bca6863e6568da534264afd4bbc2d744719896",
+    "599883c23c35ff4f4a2e45b4d6ec499c24bddb2e4e2a98d16bb383e71b4622d5",
+})
+
+
+# The seven identities PRE_PROTOCOL_ROWS started with (2026-11-22). The exemption set may lose
+# members (protocol step 7) but never gain or swap one; a reviewer of any change to this tuple or
+# to PRE_PROTOCOL_ROWS should ask why.
+LEGACY_IDENTITIES = (
+    "c044525e192a71af29609b04621141db6b9464fe896effc892895c6f3b9d51ca",
+    "c1b556106e40066c153423a0761a11313c0af0ab1a8d0ff1b0cce7c57d42a7fb",
+    "5bd1822b388c63f2cedbda2118d17cbaf4574feddacf8dd04376263a5e639e29",
+    "3b62d0a13d1845ec31489f25be40e90bce3bb872251fdea0ea4a0fb8d0237fbc",
+    "cb8eaebeb5becbf1c2363d3a465d8f2189da380877a716a77afb47372545d3fb",
+    "e019ae40b515a54546c2e53699bca6863e6568da534264afd4bbc2d744719896",
+    "599883c23c35ff4f4a2e45b4d6ec499c24bddb2e4e2a98d16bb383e71b4622d5",
+)
+
+
+def pre_protocol_problems(exempt):
+    """Exempt fingerprints that aren't among the original legacy identities."""
+    return [f"{f[:12]} is not one of the legacy rows" for f in sorted(set(exempt) - set(LEGACY_IDENTITIES))]
+
+
+def production_policy(name):
+    return json.loads((ROOT / "suites" / f"{name}.json").read_text())["modules"]["hook-guard"]
+
+
+class ProductionAllowlist(unittest.TestCase):
+    """Entries in the production suites, held to docs/hook-allowlist.md (steps 4 and 5)."""
+
+    def guard(self, command, name, repo):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".claude").mkdir()
+            hooks = {"PostToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": command}]}]}
+            (Path(tmp) / ".claude" / "settings.json").write_text(json.dumps({"hooks": hooks}))
+            suite = {"schema": 1, "profile": name, "modules": {"hook-guard": production_policy(name)}}
+            adapter = {"schema": 1, "profile": name, "modules": {}}
+            with mock.patch.dict(os.environ, {"KAIROS_REPOSITORY": repo}):
+                return kit.evaluate(Path(tmp), adapter, suite)
+
+    def line_hook_b91f78b(self):
+        # Exact bytes of MtG#59's second hook at 78cc1ab, rendered by Telosmith b91f78b
+        # (`aec init --hooks --hook-style line`); docs/hook-allowlist.md traces it.
+        command = (HOOK_FIXTURES / "telosmith-line-b91f78b.txt").read_bytes().decode("utf-8")
+        self.assertEqual(sha(command), "6a932ff50b8cb633df087ff190346e8700ab0eaebf96f42b0d626fb2e68ea454")
+        return command
+
+    def test_telosmith_line_hook_b91f78b_passes_every_production_suite(self):
+        command = self.line_hook_b91f78b()
+        for name in PRODUCTION_SUITES:
+            for repo in ("eraevous/MtG", "eraevous/anything"):   # under "*": any repository
+                with self.subTest(suite=name, repo=repo):
+                    self.assertEqual(self.guard(command, name, repo)["gate"], "passed")
+
+    def test_line_hook_with_one_byte_changed_fails_every_production_suite(self):
+        command = self.line_hook_b91f78b()
+        decoy = command[:-1] + ("x" if command[-1] != "x" else "y")
+        for name in PRODUCTION_SUITES:
+            with self.subTest(suite=name):
+                r = self.guard(decoy, name, "eraevous/MtG")
+                self.assertEqual(r["gate"], "failed")
+                self.assertIn("not on the central allowlist", r["modules"][0]["reason"])
+
+    def record_rows(self, text):
+        """{fingerprint: (source, fixture)} from the table in docs/hook-allowlist.md."""
+        rows = {}
+        for line in text.splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            m = FINGERPRINT.fullmatch(cells[0]) if line.startswith("| `") else None
+            if not m:
+                continue
+            self.assertNotIn(m.group(1), rows, "a fingerprint has two rows")
+            self.assertGreaterEqual(len(cells), 4, f"row {m.group(1)[:12]} has too few cells")
+            rows[m.group(1)] = (cells[2], cells[3])
+        return rows
+
+    def record_problems(self, rows):
+        """What's wrong with the record rows, against both production suites."""
+        problems = []
+        allowed = set()
+        for name in PRODUCTION_SUITES:
+            for prints in production_policy(name)["allowed_hook_commands_sha256"].values():
+                allowed.update(prints)
+        problems += [f"{f[:12]} allowed but not recorded" for f in sorted(allowed - set(rows))]
+        problems += [f"{f[:12]} recorded but no longer allowed: remove its row" for f in sorted(set(rows) - allowed)]
+        for fingerprint, (source, fixture) in sorted(rows.items()):
+            if fingerprint in PRE_PROTOCOL_ROWS:
+                continue
+            # Codex on #24: a fingerprint-only row must not pass. A row added under the protocol
+            # names its source commit and the hook's exact text, whose bytes hash to the row.
+            if not re.search(r"\b[0-9a-f]{7,40}\b", source):
+                problems.append(f"{fingerprint[:12]} names no source commit")
+            name = re.fullmatch(r"`([A-Za-z0-9._-]+)`", fixture)
+            path = HOOK_FIXTURES / name.group(1) if name else None
+            if path is None or not path.is_file():
+                problems.append(f"{fingerprint[:12]} names no fixture file in tests/fixtures/hooks/")
+            elif hashlib.sha256(path.read_bytes()).hexdigest() != fingerprint:
+                problems.append(f"{fingerprint[:12]} fixture's bytes hash to something else")
+        return problems
+
+    def test_every_allowed_fingerprint_has_one_traceable_record_row(self):
+        rows = self.record_rows((ROOT / "docs" / "hook-allowlist.md").read_text(encoding="utf-8"))
+        self.assertEqual(self.record_problems(rows), [])
+
+    def test_pre_protocol_list_only_shrinks(self):
+        # Rows added before docs/hook-allowlist.md existed carry no fixture. No new name joins them.
+        self.assertEqual(pre_protocol_problems(PRE_PROTOCOL_ROWS), [])
+
+    def test_swapped_pre_protocol_entry_fails(self):
+        # Codex security review on #24 (0e8d547): a count-only check let an untraced digest
+        # replace a legacy one in the exemption set and skip the source and fixture checks.
+        swapped = (PRE_PROTOCOL_ROWS - {min(PRE_PROTOCOL_ROWS)}) | {sha("echo unrendered-swap")}
+        self.assertEqual(len(swapped), len(PRE_PROTOCOL_ROWS))
+        self.assertEqual(pre_protocol_problems(swapped),
+                         [f"{sha('echo unrendered-swap')[:12]} is not one of the legacy rows"])
+
+    def test_fingerprint_only_row_fails_records_check(self):
+        # Codex's reproduction on #24: allow `echo unrendered-hook` and add a row with nothing but it.
+        fingerprint = sha("echo unrendered-hook")
+        text = (ROOT / "docs" / "hook-allowlist.md").read_text(encoding="utf-8")
+        text += f"\n| `{fingerprint}` | `\"*\"` | | | | | | |\n"
+        rows = self.record_rows(text)
+        policies = {n: production_policy(n) for n in PRODUCTION_SUITES}
+        for policy in policies.values():
+            policy["allowed_hook_commands_sha256"]["*"].append(fingerprint)
+        with mock.patch(f"{__name__}.production_policy", lambda n: policies[n]):
+            problems = self.record_problems(rows)
+        self.assertIn(f"{fingerprint[:12]} names no source commit", problems)
+        self.assertIn(f"{fingerprint[:12]} names no fixture file in tests/fixtures/hooks/", problems)
+
+    def test_fixture_that_hashes_elsewhere_fails_records_check(self):
+        rows = self.record_rows((ROOT / "docs" / "hook-allowlist.md").read_text(encoding="utf-8"))
+        target = "6a932ff50b8cb633df087ff190346e8700ab0eaebf96f42b0d626fb2e68ea454"
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "telosmith-line-b91f78b.txt").write_text("echo not the hook")
+            with mock.patch(f"{__name__}.HOOK_FIXTURES", Path(tmp)):
+                problems = self.record_problems(rows)
+        self.assertIn(f"{target[:12]} fixture's bytes hash to something else", problems)
 
 if __name__ == "__main__":
     unittest.main()
