@@ -73,5 +73,82 @@ class ProductionSuiteTests(unittest.TestCase):
                               "repository-commands": "not-declared", "hook-guard": "passed"})
 
 
+HOOK_GUARD_SUITES = ("kairos-v1", "kairos-records-v1")
+
+
+_ABSENT = object()
+
+
+def _same_json(a, b):
+    # Compare as JSON text, not Python values: True == 1 in Python, but the kit's flag() needs `is True`,
+    # and an absent key is not the same as an explicit null (Codex review on #25).
+    if a is _ABSENT or b is _ABSENT:
+        return a is b
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+def hook_guard_differences(first, second):
+    """Keys of the `hook-guard` block where two suites differ, with the repository for fingerprints."""
+    found = []
+    for key in sorted(set(first) | set(second)):
+        a, b = first.get(key, _ABSENT), second.get(key, _ABSENT)
+        if key == "allowed_hook_commands_sha256" and isinstance(a, dict) and isinstance(b, dict):
+            found += [f"{key}[{repo}]" for repo in sorted(set(a) | set(b))
+                      if not _same_json(a.get(repo, _ABSENT), b.get(repo, _ABSENT))]
+        elif not _same_json(a, b):
+            found.append(key)
+    return found
+
+
+class HookGuardSuitesAgree(unittest.TestCase):
+    """Both production suites carry their own copy of the hook-guard block (no include mechanism).
+
+    A fingerprint added to one suite but not the other would pass a hook in kairos-v1 repositories
+    and fail it in kairos-records-v1 ones. Until the suites share one allowlist file (a format
+    change, proposed to Zach in HO-LYD-20261122-WC6J Q2), this keeps the two copies identical.
+    """
+
+    def block(self, name):
+        return json.loads((ROOT / "suites" / f"{name}.json").read_text())["modules"]["hook-guard"]
+
+    def test_production_suites_have_identical_hook_guard_blocks(self):
+        first, second = (self.block(n) for n in HOOK_GUARD_SUITES)
+        self.assertEqual(hook_guard_differences(first, second), [],
+                         "edit the hook-guard block of both suites/kairos-v1.json and "
+                         "suites/kairos-records-v1.json together")
+
+    def test_a_fingerprint_missing_from_one_suite_is_flagged(self):
+        first = self.block(HOOK_GUARD_SUITES[0])
+        second = json.loads(json.dumps(first))
+        second["allowed_hook_commands_sha256"]["*"].pop()
+        self.assertEqual(hook_guard_differences(first, second), ["allowed_hook_commands_sha256[*]"])
+        del second["allowed_hook_commands_sha256"]["eraevous/MtG"]
+        self.assertEqual(hook_guard_differences(first, second),
+                         ["allowed_hook_commands_sha256[*]", "allowed_hook_commands_sha256[eraevous/MtG]"])
+
+    def test_other_guard_settings_are_compared_too(self):
+        first = self.block(HOOK_GUARD_SUITES[0])
+        second = json.loads(json.dumps(first))
+        second["forbidden_root_modules"].remove("sitecustomize")
+        second["run_first"] = False
+        self.assertEqual(hook_guard_differences(first, second), ["forbidden_root_modules", "run_first"])
+
+    def test_json_type_and_key_presence_differences_are_flagged(self):
+        # Python equality would miss each of these (Codex review on #25).
+        first = self.block(HOOK_GUARD_SUITES[0])
+        second = json.loads(json.dumps(first))
+        second["run_first"] = 1
+        second["adapter_optional"] = None
+        del first["adapter_optional"]
+        second["allowed_hook_commands_sha256"]["eraevous/Example"] = None
+        self.assertEqual(hook_guard_differences(first, second),
+                         ["adapter_optional", "allowed_hook_commands_sha256[eraevous/Example]", "run_first"])
+
+    def test_identical_copy_is_not_flagged(self):
+        # Clean decoy: a separate but equal copy (what the two suite files hold today) passes.
+        first = self.block(HOOK_GUARD_SUITES[0])
+        self.assertEqual(hook_guard_differences(first, json.loads(json.dumps(first))), [])
+
+
 if __name__ == "__main__":
     unittest.main()
