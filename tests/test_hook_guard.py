@@ -435,6 +435,77 @@ class HookGuard(unittest.TestCase):
         self.assertFalse(marker.exists())
         self.assertEqual({m["module"]: m["status"] for m in r["modules"]}["repository-tests"], "not-run")
 
+    # Codex reads hooks from a checked-in .codex/hooks.json, in the same shape (HO-CRK-20261124-N4ER,
+    # from the Codex security review on crank-mem-eval#15). Same fingerprints, same rule.
+    def codex_hooks(self, *commands, parts=(".codex", "hooks.json"), **extra):
+        hooks = {"SessionStart": [{"hooks": [{"type": "command", "command": c, "timeout": 10, **extra}
+                                             for c in commands]}]}
+        target = self.repo.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({"hooks": hooks}))
+        return target
+
+    def test_codex_hooks_are_held_to_the_same_fingerprints(self):
+        self.codex_hooks(GOOD)
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "passed", r)
+        self.codex_hooks(GOOD, OTHER)
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "failed", r)
+        self.assertIn(".codex/hooks.json", r["modules"][0]["reason"])
+        self.assertIn(sha(OTHER)[:12], r["modules"][0]["reason"])
+        self.assertNotIn("SessionStart", json.dumps(r))
+        self.assertNotIn("example.invalid", json.dumps(r))
+        self.assertEqual(self.run_guard("eraevous/special")["gate"], "passed")
+
+    def test_codex_hook_fields_and_keys_the_guard_does_not_know_fail(self):
+        # commandWindows runs a different command on Windows; nothing else is fingerprinted either.
+        for extra in ({"commandWindows": OTHER}, {"statusMessage": "x"}, {"env": {"A": "1"}}):
+            with self.subTest(extra=extra):
+                self.codex_hooks(GOOD, **extra)
+                self.assertEqual(self.run_guard()["gate"], "failed")
+        path = self.codex_hooks(GOOD)
+        body = json.loads(path.read_text())
+        body["hooks"]["SessionStart"][0]["extra"] = 1
+        path.write_text(json.dumps(body))
+        self.assertEqual(self.run_guard()["gate"], "failed")
+        for top in ({"hooks": {}, "other": 1}, [], {"hooks": []}):
+            with self.subTest(top=top):
+                path.write_text(json.dumps(top))
+                self.assertEqual(self.run_guard()["gate"], "failed")
+        path.write_text("{not json")
+        self.assertEqual(self.run_guard()["gate"], "failed")
+
+    def test_codex_hooks_outside_the_exact_root_file_fail(self):
+        for parts in ((".CODEX", "hooks.json"), (".codex", "Hooks.json"), (".codex.", "hooks.json"),
+                      ("sub", ".codex", "hooks.json")):
+            with self.subTest(parts=parts):
+                tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+                self.repo = Path(tmp.name)
+                self.codex_hooks(GOOD, parts=parts)
+                r = self.run_guard()
+                self.assertEqual(r["gate"], "failed", r)
+                self.assertRegex(r["modules"][0]["reason"], "variant|outside")
+
+    def test_codex_folder_without_hooks_passes(self):
+        # Decoy: a .codex folder (config.toml, as crank-mem installs) is not itself a hook.
+        (self.repo / ".codex").mkdir()
+        (self.repo / ".codex" / "config.toml").write_text("[features]\nhooks = true\n")
+        (self.repo / "sub" / ".codex").mkdir(parents=True)
+        (self.repo / "sub" / ".codex" / "config.toml").write_text("")
+        self.assertEqual(self.run_guard()["gate"], "passed")
+
+    def test_symlinked_codex_paths_fail(self):
+        (self.repo / "config").mkdir()
+        (self.repo / "config" / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [{"command": OTHER}]}]}}))
+        (self.repo / ".codex").symlink_to("config", target_is_directory=True)
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "failed", r)
+        self.assertIn("symlink", r["modules"][0]["reason"])
+        (self.repo / ".codex").unlink(); (self.repo / ".codex").mkdir()
+        (self.repo / ".codex" / "hooks.json").symlink_to(self.repo / "config" / "hooks.json")
+        self.assertEqual(self.run_guard()["gate"], "failed")
+
     def test_production_suites_carry_the_guard_for_every_kairos_repo(self):
         for name in ("kairos-v1", "kairos-records-v1"):
             policy = json.loads((ROOT / "suites" / f"{name}.json").read_text())["modules"]["hook-guard"]
@@ -519,6 +590,42 @@ class ProductionAllowlist(unittest.TestCase):
                 r = self.guard(decoy, name, "eraevous/MtG")
                 self.assertEqual(r["gate"], "failed")
                 self.assertIn("not on the central allowlist", r["modules"][0]["reason"])
+
+    def codex_guard(self, command, name, repo):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".codex").mkdir()
+            hooks = {"SessionStart": [{"hooks": [{"type": "command", "command": command, "timeout": 10}]}]}
+            (Path(tmp) / ".codex" / "hooks.json").write_text(json.dumps({"hooks": hooks}))
+            suite = {"schema": 1, "profile": name, "modules": {"hook-guard": production_policy(name)}}
+            adapter = {"schema": 1, "profile": name, "modules": {}}
+            with mock.patch.dict(os.environ, {"KAIROS_REPOSITORY": repo}):
+                return kit.evaluate(Path(tmp), adapter, suite)
+
+    # Exact bytes of crank-mem-eval#15's two .codex/hooks.json commands at 82d1ac7, written by hand
+    # for that repository (docs/hook-allowlist.md: repository scope).
+    CRANK_CODEX = {"crank-codex-session-start-82d1ac7.txt": "c8bfc0b9", "crank-codex-post-write-82d1ac7.txt": "5d350200"}
+
+    def crank_codex_hooks(self):
+        commands = [(HOOK_FIXTURES / f).read_bytes().decode("utf-8") for f in self.CRANK_CODEX]
+        self.assertEqual([sha(c)[:8] for c in commands], list(self.CRANK_CODEX.values()))
+        return commands
+
+    def test_crank_codex_hooks_82d1ac7_pass_only_for_crank_mem_eval(self):
+        for command in self.crank_codex_hooks():
+            for name in PRODUCTION_SUITES:
+                with self.subTest(suite=name, command=command[-20:]):
+                    self.assertEqual(self.codex_guard(command, name, "eraevous/crank-mem-eval")["gate"], "passed")
+                    self.assertEqual(self.codex_guard(command, name, "eraevous/MtG")["gate"], "failed")
+
+    def test_crank_codex_hooks_with_one_byte_changed_fail(self):
+        for command in self.crank_codex_hooks():
+            decoy = command.replace("--env-file=/dev/null ", "")   # the bare bun the review flagged
+            self.assertNotEqual(decoy, command)
+            for name in PRODUCTION_SUITES:
+                with self.subTest(suite=name, command=command[-20:]):
+                    r = self.codex_guard(decoy, name, "eraevous/crank-mem-eval")
+                    self.assertEqual(r["gate"], "failed")
+                    self.assertIn("not on the central allowlist", r["modules"][0]["reason"])
 
     def record_rows(self, text):
         """{fingerprint: (source, fixture)} from the table in docs/hook-allowlist.md."""

@@ -319,6 +319,8 @@ def hook_guard(root, config, policy):
     guard keeps no fingerprints for them. It also fails if
     the repository root holds a module file, compiled file or package folder that would shadow a
     module a hook imports (aec, runpy, site, sitecustomize, ...), the trick behind Telosmith#77.
+    Codex hooks in a checked-in `.codex/hooks.json` are held to the same fingerprints, with the same
+    shape rules (HO-CRK-20261124-N4ER); any other spelling or location of that file fails.
 
     What it can't do: vet code a hook legitimately runs from the checkout (for example a repo's
     own drift script), and it can't stop a pull request that rewrites the workflow calling it.
@@ -336,7 +338,8 @@ def hook_guard(root, config, policy):
     names = [e.name for e in root.iterdir()]
     checked = guard_root_modules(names, policy.get("forbidden_root_modules", []))
     guard_agent_paths(root, names)
-    return checked + guard_fingerprints(root, allowed, extras)
+    guard_codex_paths(root)
+    return checked + guard_fingerprints(root, allowed, extras) + guard_codex_hooks(root, allowed)
 
 
 def guard_root_modules(names, stems):
@@ -445,30 +448,76 @@ def guard_fingerprints(root, allowed, extras):
             if digest not in extras:
                 raise KitError(f"{rel}: setting {k_index} ({digest[:12]}) besides hooks is not on the central allowlist")
             checked += 1
-        hooks = settings.get("hooks", {})
-        if not isinstance(hooks, dict):
-            raise KitError(f"{rel}: hooks must be an object")
-        for e_index, (_event, matchers) in enumerate(hooks.items(), 1):
-            # The event key comes from the file, so it is never echoed: positions only.
-            event = f"hook group {e_index}"
-            for matcher in matchers if isinstance(matchers, list) else [None]:
-                entries = matcher.get("hooks") if isinstance(matcher, dict) else None
-                if isinstance(matcher, dict) and set(matcher) - {"matcher", "hooks"}:
-                    raise KitError(f"{rel}: {event} has a field the guard doesn't know")
-                if not isinstance(entries, list):
-                    raise KitError(f"{rel}: {event} hook entry has an unexpected shape")
-                for entry in entries:
-                    if isinstance(entry, dict) and set(entry) - {"type", "command", "timeout"}:
-                        raise KitError(f"{rel}: {event} hook has a field the guard doesn't know")
-                    cmd = entry.get("command") if isinstance(entry, dict) else None
-                    if not isinstance(cmd, str):
-                        raise KitError(f"{rel}: {event} hook without a command string")
-                    digest = hashlib.sha256(cmd.encode("utf-8")).hexdigest()
-                    if digest not in allowed:
-                        raise KitError(f"{rel}: {event} hook {digest[:12]} is not on the central allowlist "
-                                       f"(a changed or new hook; the owner adds its fingerprint in Lydian)")
-                    checked += 1
+        checked += guard_hook_commands(rel, settings.get("hooks", {}), allowed)
     return checked
+
+
+def guard_hook_commands(rel, hooks, allowed):
+    """Hold each `hooks.<event>[].hooks[].command` to a fingerprint; fail any field the guard doesn't
+    know. Claude settings and Codex's hooks.json share this shape. Returns the number checked."""
+    checked = 0
+    if not isinstance(hooks, dict):
+        raise KitError(f"{rel}: hooks must be an object")
+    for e_index, (_event, matchers) in enumerate(hooks.items(), 1):
+        # The event key comes from the file, so it is never echoed: positions only.
+        event = f"hook group {e_index}"
+        for matcher in matchers if isinstance(matchers, list) else [None]:
+            entries = matcher.get("hooks") if isinstance(matcher, dict) else None
+            if isinstance(matcher, dict) and set(matcher) - {"matcher", "hooks"}:
+                raise KitError(f"{rel}: {event} has a field the guard doesn't know")
+            if not isinstance(entries, list):
+                raise KitError(f"{rel}: {event} hook entry has an unexpected shape")
+            for entry in entries:
+                # Deny by default: Codex's commandWindows, for one, runs another command on Windows.
+                if isinstance(entry, dict) and set(entry) - {"type", "command", "timeout"}:
+                    raise KitError(f"{rel}: {event} hook has a field the guard doesn't know")
+                cmd = entry.get("command") if isinstance(entry, dict) else None
+                if not isinstance(cmd, str):
+                    raise KitError(f"{rel}: {event} hook without a command string")
+                digest = hashlib.sha256(cmd.encode("utf-8")).hexdigest()
+                if digest not in allowed:
+                    raise KitError(f"{rel}: {event} hook {digest[:12]} is not on the central allowlist "
+                                   f"(a changed or new hook; the owner adds its fingerprint in Lydian)")
+                checked += 1
+    return checked
+
+
+def guard_codex_paths(root):
+    """Fail on a Codex hooks file the fingerprint stage wouldn't read: a symlink, a case or
+    trailing-character variant, or one in a `.codex` folder below the root (Codex layers project
+    config from the working folder up, so a session started in a subfolder may read it). Counts no cases."""
+    for rel in (".codex", ".codex/hooks.json"):
+        if (root / rel).is_symlink():
+            raise KitError("a guarded Codex hooks path is a symlink")
+    for dirpath, dirnames, _filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        here = Path(dirpath)
+        for d in dirnames:
+            if norm(d) != ".codex":
+                continue
+            exact_root = here == root and d == ".codex"
+            for f in (here / d).iterdir():
+                if norm(f.name) == "hooks.json" and not (exact_root and f.name == "hooks.json"):
+                    raise KitError("repository has Codex hooks outside the exact root .codex/hooks.json "
+                                   "(a case variant, a trailing dot or space, or a subfolder)")
+
+
+def guard_codex_hooks(root, allowed):
+    """Hold every command in the root `.codex/hooks.json` to a central fingerprint. Returns the number checked."""
+    rel = ".codex/hooks.json"
+    path = within(root, rel)
+    if not path.is_file():
+        return 0
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        raise KitError(f"{rel} is not valid JSON")
+    if not isinstance(body, dict):
+        raise KitError(f"{rel} must be a JSON object")
+    if set(body) - {"hooks"}:
+        # Keys are never echoed. Nothing besides hooks is fingerprinted here, so anything else fails.
+        raise KitError(f"{rel} has a key besides hooks, which the guard doesn't know")
+    return guard_hook_commands(rel, body.get("hooks", {}), allowed)
 
 
 CODE_IMPACT_LIMIT = 60_000   # characters kept in the job summary (GitHub allows 1 MiB per step)
