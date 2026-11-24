@@ -5,7 +5,8 @@ names the modules and their policy; the repository's .kairos/adapter.json only s
 Exit 0 when the gate passes, 1 otherwise.
 
 This runs repository code. It is not a sandbox and must not receive secrets.
-No network, git writes, installation, or publishing is performed by this runner.
+No git writes, installation, or publishing is performed by this runner. Its only network use is
+the new-dependencies module's registry lookups (PyPI, npm) for packages a pull request adds.
 The report's "scope": "local-prototype" and kit_version are report fields callers may read, kept
 as they are; they don't describe where the kit runs.
 """
@@ -559,9 +560,269 @@ def telosmith(root, config, policy):
     return count
 
 
+# ---- Pull-request guards: test-tampering and new-dependencies (HO-LYD-20261124-SGZN) ----------
+# Both read the pull request from the environment the shared workflow sets from the event payload
+# (never from the repository): KAIROS_EVENT_NAME, KAIROS_BASE_SHA, KAIROS_PR_BODY, KAIROS_PR_AUTHOR,
+# KAIROS_PR_CREATED_AT. Outside a pull request they check nothing and say so.
+
+# A decision id as a whole token: DEC-<n> (up to DEC-272) or DEC-YYYYMMDD-XXXX (DEC-272 on).
+DECISION_ID = re.compile(r"(?<![\w-])DEC-(?:\d{8}-[0-9A-HJKMNP-TV-Z]{4}|\d{1,4})(?![\w-])")
+TESTS_CHANGED = re.compile(r"(?m)^Tests-changed-because:[ \t]*\S")
+TEST_FILE = re.compile(r"(?:^|/)(?:test_[^/]*\.py|[^/]*_test\.py|tests\.py|[^/]*\.(?:test|spec)\.[cm]?[jt]sx?)$")
+PY_ASSERTS = re.compile(r"(?<![\w.])assert\b|\.assert[A-Z_]\w*\s*\(")
+PY_SKIPS = re.compile(r"@pytest\.mark\.(?:skip|skipif|xfail)\b|\bunittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b"
+                      r"|\bpytest\.(?:skip|xfail)\s*\(|\.skipTest\s*\(")
+JS_ASSERTS = re.compile(r"(?<![\w.$])expect\s*\(|(?<![\w.$])assert\b")
+JS_SKIPS = re.compile(r"\.skip\s*\(|(?<![\w.$])x(?:it|test|describe)\s*\(|\.todo\s*\(")
+BOTS_EXEMPT = ("dependabot[bot]",)
+
+
+def pull_request_context(policy):
+    """The pull request under check, or a note why there is none. Fails closed on a PR with no base."""
+    if os.environ.get("KAIROS_EVENT_NAME", "") != "pull_request":
+        return None, {"cases": 0, "note": "not a pull request: nothing to compare"}
+    author = os.environ.get("KAIROS_PR_AUTHOR", "")
+    if author in BOTS_EXEMPT:
+        return None, {"cases": 0, "note": f"{author}: dependabot pull requests are exempt"}
+    base = os.environ.get("KAIROS_BASE_SHA", "")
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", base):
+        raise KitError("pull request without a base revision: cannot compare")
+    enforce_from = policy.get("enforce_from", "")
+    created = os.environ.get("KAIROS_PR_CREATED_AT", "")
+    # ISO-8601 UTC strings of one shape compare as text. A PR older than enforce_from only warns
+    # (no retroactive blocking); an unknown creation time is enforced.
+    warn_only = bool(enforce_from and created and created < enforce_from)
+    return {"base": base, "body": os.environ.get("KAIROS_PR_BODY", "") or "", "warn_only": warn_only}, None
+
+
+def git_out(root, *args):
+    try:
+        done = subprocess.run(["git", "-c", "core.quotePath=false", "-C", str(root), *args],
+                              env={k: os.environ[k] for k in ("PATH", "HOME", "TMPDIR") if k in os.environ},
+                              stdin=subprocess.DEVNULL, capture_output=True, timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise KitError(f"git {args[0]}: {type(exc).__name__}") from exc
+    if done.returncode:
+        raise KitError(f"git {args[0]} failed")
+    return done.stdout
+
+
+def file_at(root, rev, path):
+    """A file's text at a revision, or None when it doesn't exist there."""
+    listed = git_out(root, "ls-tree", "-z", rev, "--", path).split(b"\0")
+    if not listed or not listed[0]:
+        return None
+    return git_out(root, "show", f"{rev}:{path}").decode("utf-8", "replace")
+
+
+def tracked(root, rev):
+    return [p for p in git_out(root, "ls-tree", "-r", "-z", "--name-only", rev).decode("utf-8", "replace").split("\0") if p]
+
+
+def guard_result(findings, ctx, cleared_by, cases, how):
+    if not findings:
+        return {"cases": cases}
+    if cleared_by:
+        return {"cases": cases, "note": f"{len(findings)} finding(s) cleared by the PR body ({cleared_by})",
+                "warnings": findings}
+    if ctx["warn_only"]:
+        return {"cases": cases, "note": "pull request opened before enforcement: warning only",
+                "warnings": findings}
+    raise KitError("; ".join(findings) + f". To accept: {how}")
+
+
+def tampering_counts(path, text):
+    """(assertions, skips) in one test file, by language. Comments and strings count too: it's a diff signal."""
+    if path.endswith(".py"):
+        return len(PY_ASSERTS.findall(text)), len(PY_SKIPS.findall(text))
+    return len(JS_ASSERTS.findall(text)), len(JS_SKIPS.findall(text))
+
+
+def test_tampering(root, config, policy):
+    """Fail a PR that deletes a test file, renames one away, lowers its assertion count or adds a skip.
+
+    Survey issue #1 (ImpossibleBench: agents that cheat mostly edit the tests). Compares base and
+    head with git only. Cleared by a decision id (DEC-n or DEC-YYYYMMDD-XXXX) or a
+    `Tests-changed-because: <reason>` line in the PR body. Known limit: the check can't tell who
+    wrote that line; owner review of the PR is what holds it to Zach's word.
+    """
+    ctx, skipped = pull_request_context(policy)
+    if skipped:
+        return skipped
+    raw = git_out(root, "diff", "--name-status", "-M", "-z", ctx["base"], "HEAD").decode("utf-8", "replace").split("\0")
+    findings = []
+    i = 0
+    while i < len(raw) and raw[i]:
+        status = raw[i]
+        if status[0] in "RC":
+            old, new = raw[i + 1], raw[i + 2]
+            i += 3
+        else:
+            old = new = raw[i + 1]
+            i += 2
+        if not TEST_FILE.search(old) or status[0] in "AC":
+            continue
+        if status[0] == "D":
+            findings.append(f"{old}: test file deleted")
+            continue
+        if status[0] == "R" and not TEST_FILE.search(new):
+            findings.append(f"{old}: test file renamed to non-test {new}")
+            continue
+        before = tampering_counts(old, file_at(root, ctx["base"], old) or "")
+        after = tampering_counts(new, file_at(root, "HEAD", new) or "")
+        label = old if old == new else f"{old} -> {new}"
+        if after[0] < before[0]:
+            findings.append(f"{label}: assertions {before[0]} -> {after[0]}")
+        if after[1] > before[1]:
+            findings.append(f"{label}: skips {before[1]} -> {after[1]}")
+    cleared = DECISION_ID.search(ctx["body"]) or TESTS_CHANGED.search(ctx["body"])
+    cases = sum(1 for p in tracked(root, "HEAD") if TEST_FILE.search(p))
+    return guard_result(findings, ctx, cleared and cleared.group(0).strip(), cases,
+                        "name a decision id (DEC-...) or add a 'Tests-changed-because: <reason>' line "
+                        "to the PR body, then push again (a re-run reuses the old body)")
+
+
+PEP508_NAME = re.compile(r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*(?:\[[^\]]*\])?\s*(@)?")
+NPM_LOCAL = re.compile(r"^(?:file|link|workspace|portal|git|git\+\w+|https?|github|npm):|^[\w.-]+/[\w.-]+(?:#.*)?$")
+
+
+def pypi_name(spec):
+    """(normalised name, registry?) from a PEP 508 string; None when it names no package."""
+    match = PEP508_NAME.match(spec)
+    if not match:
+        return None
+    return re.sub(r"[-_.]+", "-", match.group(1)).lower(), not match.group(2)
+
+
+def manifest_packages(path, text):
+    """{(ecosystem, name): registry?} declared directly in one manifest. Lockfiles aren't read:
+    their new entries are mostly transitive (the coordinator's addendum to the handoff)."""
+    found = {}
+    name = path.rsplit("/", 1)[-1]
+    if name == "package.json":
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise KitError(f"{path}: not valid JSON") from exc
+        for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+            section = data.get(key) if isinstance(data, dict) else None
+            if isinstance(section, dict):
+                for pkg, spec in section.items():
+                    found[("npm", pkg)] = not (isinstance(spec, str) and NPM_LOCAL.search(spec.strip()))
+        return found
+    specs = []
+    if name == "pyproject.toml":
+        import tomllib
+        try:
+            data = tomllib.loads(text)
+        except tomllib.TOMLDecodeError as exc:
+            raise KitError(f"{path}: not valid TOML") from exc
+        project = data.get("project", {})
+        specs += project.get("dependencies", []) or []
+        for group in (project.get("optional-dependencies", {}) or {}).values():
+            specs += group or []
+        for group in (data.get("dependency-groups", {}) or {}).values():
+            specs += [s for s in group or [] if isinstance(s, str)]
+        poetry = data.get("tool", {}).get("poetry", {})
+        tables = [poetry.get("dependencies", {}), poetry.get("dev-dependencies", {})]
+        tables += [g.get("dependencies", {}) for g in (poetry.get("group", {}) or {}).values() if isinstance(g, dict)]
+        for table in tables:
+            for pkg, spec in (table or {}).items():
+                if pkg.lower() != "python":
+                    local = isinstance(spec, dict) and any(k in spec for k in ("path", "git", "url"))
+                    found[("pypi", re.sub(r"[-_.]+", "-", pkg).lower())] = not local
+    else:   # requirements*.txt
+        for line in text.splitlines():
+            line = line.split(" #", 1)[0].strip()
+            if line and not line.startswith(("#", "-", ".", "/")) and "://" not in line:
+                specs.append(line)
+    for spec in specs:
+        parsed = pypi_name(spec) if isinstance(spec, str) else None
+        if parsed:
+            found[("pypi", parsed[0])] = parsed[1] and "://" not in spec
+    return found
+
+
+def is_manifest(path):
+    name = path.rsplit("/", 1)[-1]
+    if "node_modules/" in f"/{path}":
+        return False
+    return name in ("package.json", "pyproject.toml") or bool(re.fullmatch(r"requirements[^/]*\.txt", name))
+
+
+def repository_packages(root, rev):
+    packages = {}
+    for path in tracked(root, rev):
+        if is_manifest(path):
+            for key, registry in manifest_packages(path, file_at(root, rev, path) or "").items():
+                packages[key] = packages.get(key, False) or registry
+    return packages
+
+
+def registry_status(url):
+    """HTTP status of a registry lookup, or None when the registry couldn't be reached. Standard library only."""
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(url, headers={"User-Agent": "lydian-new-dependencies"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return response.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def registry_url(ecosystem, name):
+    from urllib.parse import quote
+    if ecosystem == "pypi":
+        return f"https://pypi.org/pypi/{quote(name, safe='')}/json"
+    return f"https://registry.npmjs.org/{quote(name, safe='@')}"
+
+
+def new_dependencies(root, config, policy):
+    """Fail a PR that adds a package without naming a decision, or adds one that doesn't exist.
+
+    Survey issue #5 (about 20% of model-suggested packages don't exist; Spracklen et al.). Reads
+    package.json, pyproject.toml and requirements*.txt at base and head, anywhere in the
+    repository, and compares the packages each ecosystem declares directly: a version bump or a
+    package moved between manifests isn't new. Each new registry package is looked up on PyPI or
+    npm (the only network this kit makes); a 404 fails even with a decision id, and an unreachable
+    registry is a warning, not a failure.
+    """
+    ctx, skipped = pull_request_context(policy)
+    if skipped:
+        return skipped
+    before = repository_packages(root, ctx["base"])
+    after = repository_packages(root, "HEAD")
+    added = sorted(key for key in after if key not in before)
+    findings, warnings = [], []
+    for ecosystem, name in added:
+        if not after[(ecosystem, name)]:
+            continue
+        status = registry_status(registry_url(ecosystem, name))
+        if status == 404:
+            findings.append(f"{ecosystem}:{name}: package does not exist (possibly invented)")
+        elif status != 200:
+            warnings.append(f"{ecosystem}:{name}: could not reach the registry to confirm it exists ({status})")
+    decision = DECISION_ID.search(ctx["body"])
+    if added and not decision:
+        findings.insert(0, "new dependencies with no decision id in the PR body: "
+                        + ", ".join(f"{e}:{n}" for e, n in added))
+    invented = [f for f in findings if "possibly invented" in f]
+    if invented and not ctx["warn_only"]:
+        raise KitError("; ".join(findings))   # a decision id doesn't make a package exist
+    result = guard_result(findings, ctx, decision and decision.group(0), len(added),
+                          "name the decision that approved them (DEC-...) in the PR body, then push again")
+    if warnings:
+        result["warnings"] = result.get("warnings", []) + warnings
+    return result
+
+
 MODULES = {"interoperability": interoperability, "modularity": modularity,
            "repository-tests": repository_tests, "repository-commands": repository_commands,
-           "hook-guard": hook_guard, "telosmith": telosmith}
+           "hook-guard": hook_guard, "telosmith": telosmith,
+           "test-tampering": test_tampering, "new-dependencies": new_dependencies}
 
 
 def flag(policy, key):
@@ -618,7 +879,13 @@ def evaluate(root, adapter, suite):
                 raise KitError("required module lacks an adapter")
             if not isinstance(config[name], dict) or not isinstance(policy, dict):
                 raise KitError("module configuration and policy must be objects")
-            result["cases"] = MODULES[name](root, config[name], policy)
+            outcome = MODULES[name](root, config[name], policy)
+            # A module returns its case count, or {"cases", "note"?, "warnings"?}: a warning is
+            # reported and never fails the gate (the PR guards' warn-only rollout).
+            if isinstance(outcome, dict):
+                result.update({k: outcome[k] for k in ("note", "warnings") if outcome.get(k)})
+                outcome = outcome.get("cases", 0)
+            result["cases"] = outcome
             result["status"] = "passed"
         except (KitError, KeyError, ValueError, TypeError, SyntaxError, OSError) as exc:
             # Do not echo source snippets, process output, or secrets into a shared report.

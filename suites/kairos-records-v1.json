@@ -43,6 +43,16 @@
         "*": []
       }
     },
+    "test-tampering": {
+      "adapter_optional": true,
+      "enforce_from": "2026-11-26T00:00:00Z",
+      "why": "Agents that game a task mostly edit its tests (ImpossibleBench; survey issue #1). A PR that deletes or renames away a test file, lowers a test file's assertion count or adds a skip fails unless its body names a decision (DEC-...) or carries a 'Tests-changed-because: <reason>' line (Zach, 2026-11-24: \"Make 3, 4, and 5 happen. Approved.\"; HO-LYD-20261124-SGZN). PRs opened before enforce_from only warn. Dependabot PRs are exempt."
+    },
+    "new-dependencies": {
+      "adapter_optional": true,
+      "enforce_from": "2026-11-26T00:00:00Z",
+      "why": "About a fifth of model-suggested packages don't exist (Spracklen et al.; survey issue #5). A PR that adds a package to package.json, pyproject.toml or requirements*.txt must name a decision (DEC-...) in its body, and each new package must exist on PyPI or npm (Zach, 2026-11-24, HO-LYD-20261124-SGZN). Version bumps and lockfile-only changes don't count; Dependabot PRs are exempt. PRs opened before enforce_from only warn, except a package that doesn't exist."
+    },
     "telosmith": {
       "timeout_seconds": 300
     },
