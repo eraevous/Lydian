@@ -635,6 +635,22 @@ def guard_result(findings, ctx, cleared_by, cases, how):
     raise KitError("; ".join(findings) + f". To accept: {how}")
 
 
+REGEX_KEYWORDS = ("return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw",
+                  "case", "do", "else", "yield", "await")
+
+
+def _regex_can_start(code):
+    """True when a "/" after `code` begins a JS regex literal rather than a division: after an
+    operator, an opening bracket, a comma or semicolon, a keyword, or at the start."""
+    stripped = code.rstrip()
+    if not stripped:
+        return True
+    if stripped[-1] in "(,=:[!&|?{};+-*%<>~^":
+        return True
+    word = re.search(r"[A-Za-z_$][\w$]*$", stripped)
+    return bool(word) and word.group(0) in REGEX_KEYWORDS
+
+
 def _scan_code(text, i, python, nested):
     """Scan from i, keeping code and dropping comments and string contents. Code inside a JS
     template's ${...} or a Python f-string's {...} runs, so it is scanned as code (Codex on #29).
@@ -662,6 +678,28 @@ def _scan_code(text, i, python, nested):
             i = n if end < 0 else end + 2
             out.append(" ")
             continue
+        if not python and c == "/" and _regex_can_start("".join(out)):
+            # A regex literal: skip it whole, so a quote inside (/can't/) isn't read as a string
+            # that swallows the code after it (Codex security review on #29).
+            j, in_class = i + 1, False
+            while j < n and text[j] != "\n":
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == "[":
+                    in_class = True
+                elif text[j] == "]":
+                    in_class = False
+                elif text[j] == "/" and not in_class:
+                    break
+                j += 1
+            if j < n and text[j] == "/":
+                j += 1
+                while j < n and text[j].isalpha():
+                    j += 1
+                out.append("/r/")
+                i = j
+                continue
         if c in ("'\"" if python else "'\"`"):
             close = text[i:i + 3] if python and text[i:i + 3] in ('"""', "\'\'\'") else c
             prefix = re.search(r"[A-Za-z]*$", text[max(0, i - 3):i]).group(0).lower() if python else ""
@@ -828,7 +866,10 @@ def manifest_packages(path, text):
     else:   # requirements*.txt
         for line in text.splitlines():
             line = line.split(" #", 1)[0].strip()
-            if line and not line.startswith(("#", "-", ".", "/")) and "://" not in line:
+            if line and not line.startswith(("#", "-", ".", "/")) and (
+                    "://" not in line or re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*\s*(?:\[[^\]]*\])?\s*@", line)):
+                # A named direct reference (name @ https://...) is a new non-registry package: it
+                # needs a decision id though nothing is looked up (Codex security review on #29).
                 specs.append(line)
     own = re.sub(r"[-_.]+", "-", self_name).lower() if name == "pyproject.toml" and isinstance(self_name, str) else None
     for spec in specs:
