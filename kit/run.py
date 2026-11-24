@@ -705,8 +705,17 @@ def _scan_code(text, i, python, nested):
             prefix = re.search(r"[A-Za-z]*$", text[max(0, i - 3):i]).group(0).lower() if python else ""
             interpolated = c == "`" or "f" in prefix
             j = i + len(close)
+            mark = len(out)
             out.append('"')
+            single_line, broken = close in ("'", '"'), False
             while j < n and not text.startswith(close, j):
+                if single_line and text[j] == "\n":
+                    # A '...' or "..." string can't run past its line (JS or Python), so this quote
+                    # didn't open one: the scanner misread what came before it (say a regex after
+                    # if (...)). Read the quote as code and carry on, so nothing after it is hidden
+                    # (Codex on #29).
+                    broken = True
+                    break
                 if text[j] == "\\":
                     j += 2
                 elif interpolated and not python and text.startswith("${", j):
@@ -719,6 +728,11 @@ def _scan_code(text, i, python, nested):
                     out.append(" " + code + " ")
                 else:
                     j += 1
+            if broken:
+                del out[mark:]
+                out.append(c)
+                i += 1
+                continue
             out.append('"')
             i = j + len(close)
             continue

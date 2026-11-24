@@ -188,6 +188,10 @@ class TestTamperingTests(Base):
         self.write("src/rx.test.js", "const contraction = /can't/;\ntest.only(\"focused\", () => {});\nconst y = a / b / c;\n")
         self.assert_flags("src/rx.test.js: new test file with skips 0 -> 1")
 
+    def test_misread_quote_never_hides_the_next_line(self):
+        self.write("src/ctl.test.js", 'if (true) /can\'t/.test("x");\ntest.only("focused", () => {});\n')
+        self.assert_flags("src/ctl.test.js: new test file with skips 0 -> 1")
+
     # Clean decoys it must not flag.
     def test_untouched_tests_pass(self):
         self.write("README.md", "changed\n")
