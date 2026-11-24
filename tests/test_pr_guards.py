@@ -310,6 +310,11 @@ class NewDependencyTests(Base):
         self.run_module(KAIROS_PR_BODY="DEC-1")
         self.assertEqual(self.calls, [])
 
+    def test_uv_local_source_with_a_marker_is_still_looked_up(self):
+        self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27", "invented-marker-zz"]\n'
+                   '[tool.uv.sources]\ninvented-marker-zz = { path = "libs/local", marker = "sys_platform == \'win32\'" }\n')
+        self.assert_flags("pypi:invented-marker-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
     def test_uv_index_source_is_still_looked_up(self):
         self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27", "invented-pkg-zz"]\n'
                    '[tool.uv.sources]\ninvented-pkg-zz = { index = "pypi" }\n')
