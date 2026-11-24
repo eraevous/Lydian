@@ -180,6 +180,10 @@ class TestTamperingTests(Base):
         (self.repo / "src/focus.test.js").symlink_to("payload.js")
         self.assert_flags("src/focus.test.js: a symlink")
 
+    def test_chained_each_after_focus_or_skip(self):
+        self.write("src/each.test.js", 'test.only.each([[1]])("focused", () => {});\ntest.skip.each([[2]])("s", () => {});\nxit.each([[3]])("x", () => {});\n')
+        self.assert_flags("src/each.test.js: new test file with skips 0 -> 3")
+
     # Clean decoys it must not flag.
     def test_untouched_tests_pass(self):
         self.write("README.md", "changed\n")
