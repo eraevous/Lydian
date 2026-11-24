@@ -570,10 +570,10 @@ DECISION_ID = re.compile(r"(?<![\w-])DEC-(?:\d{8}-[0-9A-HJKMNP-TV-Z]{4}|\d{1,4})
 TESTS_CHANGED = re.compile(r"(?m)^Tests-changed-because:[ \t]*\S")
 TEST_FILE = re.compile(r"(?:^|/)(?:test_[^/]*\.py|[^/]*_test\.py|tests\.py|[^/]*\.(?:test|spec)\.[cm]?[jt]sx?)$")
 PY_ASSERTS = re.compile(r"(?<![\w.])assert\b|\.assert[A-Z_]\w*\s*\(")
-PY_SKIPS = re.compile(r"@pytest\.mark\.(?:skip|skipif|xfail)\b|\bunittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b"
+PY_SKIPS = re.compile(r"\bmark\.(?:skip|skipif|xfail)\b|\bunittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b"
                       r"|\bpytest\.(?:skip|xfail)\s*\(|\.skipTest\s*\(")
 JS_ASSERTS = re.compile(r"(?<![\w.$])expect\s*\(|(?<![\w.$])assert\b")
-JS_SKIPS = re.compile(r"\.skip\s*\(|(?<![\w.$])x(?:it|test|describe)\s*\(|\.todo\s*\(")
+JS_SKIPS = re.compile(r"\.(?:skip|skipIf|only)\s*\(|(?<![\w.$])x(?:it|test|describe)\s*\(|\.todo\s*\(")
 BOTS_EXEMPT = ("dependabot[bot]",)
 
 
@@ -633,8 +633,12 @@ def guard_result(findings, ctx, cleared_by, cases, how):
 
 def tampering_counts(path, text):
     """(assertions, skips) in one test file, by language. Comments and strings count too: it's a diff signal."""
+    # Line comments don't count, so "assert True  # assert f() == 2" is one assertion, not two.
+    # A focused test (.only) disables its siblings, so it counts as a skip.
     if path.endswith(".py"):
+        text = re.sub(r"#[^\n]*", "", text)
         return len(PY_ASSERTS.findall(text)), len(PY_SKIPS.findall(text))
+    text = re.sub(r"(?<![:\\])//[^\n]*", "", text)
     return len(JS_ASSERTS.findall(text)), len(JS_SKIPS.findall(text))
 
 
@@ -750,13 +754,33 @@ def is_manifest(path):
     return name in ("package.json", "pyproject.toml") or bool(re.fullmatch(r"requirements[^/]*\.txt", name))
 
 
+def own_names(path, text):
+    """The packages a manifest itself defines: a self-referencing extra or a workspace sibling is not
+    a registry package (dissent review on this change)."""
+    name = path.rsplit("/", 1)[-1]
+    try:
+        if name == "package.json":
+            own = json.loads(text).get("name")
+            return {("npm", own)} if isinstance(own, str) else set()
+        if name == "pyproject.toml":
+            import tomllib
+            data = tomllib.loads(text)
+            own = data.get("project", {}).get("name") or data.get("tool", {}).get("poetry", {}).get("name")
+            return {("pypi", re.sub(r"[-_.]+", "-", own).lower())} if isinstance(own, str) else set()
+    except (ValueError, AttributeError):
+        pass
+    return set()
+
+
 def repository_packages(root, rev):
-    packages = {}
+    packages, own = {}, set()
     for path in tracked(root, rev):
         if is_manifest(path):
-            for key, registry in manifest_packages(path, file_at(root, rev, path) or "").items():
+            text = file_at(root, rev, path) or ""
+            own |= own_names(path, text)
+            for key, registry in manifest_packages(path, text).items():
                 packages[key] = packages.get(key, False) or registry
-    return packages
+    return {key: registry for key, registry in packages.items() if key not in own}
 
 
 def registry_status(url):

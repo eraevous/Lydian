@@ -132,6 +132,18 @@ class TestTamperingTests(Base):
         (self.repo / "tests/test_x.py").unlink()
         self.assert_flags("deleted", KAIROS_PR_BODY="see XDEC-12 and DEC-")
 
+    def test_module_level_and_imported_mark_skips(self):
+        self.write("tests/test_x.py", "from pytest import mark\npytestmark = pytest.mark.skip\n" + PY_TEST.replace("def test_b", "@mark.xfail\ndef test_b"))
+        self.assert_flags("skips 0 -> 2")
+
+    def test_focused_js_test_counts_as_a_skip(self):
+        self.write("src/app.test.ts", JS_TEST.replace('test("a"', 'test.only("a"') + 'test.skipIf(true)("b", () => {});\n')
+        self.assert_flags("skips 0 -> 2")
+
+    def test_assertions_in_comments_do_not_count(self):
+        self.write("tests/test_x.py", PY_TEST.replace("assert 1 == 1", "assert True  # assert 1 == 1").replace("        self.assertTrue(True)\n", ""))
+        self.assert_flags("assertions 3 -> 2")
+
     # Clean decoys it must not flag.
     def test_untouched_tests_pass(self):
         self.write("README.md", "changed\n")
@@ -232,6 +244,14 @@ class NewDependencyTests(Base):
         self.assertEqual(self.calls, ["https://registry.npmjs.org/@scope%2Fpkg"])
 
     # Clean decoys it must not flag.
+    def test_self_extra_and_workspace_sibling_are_not_looked_up(self):
+        self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27"]\n'
+                   '[project.optional-dependencies]\nall = ["x[a]"]\n')
+        self.write("libs/my-lib/package.json", json.dumps({"name": "my-lib"}))
+        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "my-lib": "*"}}))
+        self.assertEqual(self.run_module()["cases"], 0)
+        self.assertEqual(self.calls, [])
+
     def test_version_bump_is_not_new(self):
         self.write("requirements.txt", "requests==2.32\n")
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.3.0"}}))

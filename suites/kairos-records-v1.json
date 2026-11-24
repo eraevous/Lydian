@@ -51,7 +51,7 @@
     "new-dependencies": {
       "adapter_optional": true,
       "enforce_from": "2026-11-26T00:00:00Z",
-      "why": "About a fifth of model-suggested packages don't exist (Spracklen et al.; survey issue #5). A PR that adds a package to package.json, pyproject.toml or requirements*.txt must name a decision (DEC-...) in its body, and each new package must exist on PyPI or npm (Zach, 2026-11-24, HO-LYD-20261124-SGZN). Version bumps and lockfile-only changes don't count; Dependabot PRs are exempt. PRs opened before enforce_from only warn, except a package that doesn't exist."
+      "why": "About a fifth of model-suggested packages don't exist (Spracklen et al.; survey issue #5). A PR that adds a package to package.json, pyproject.toml or requirements*.txt must name a decision (DEC-...) in its body, and each new package must exist on PyPI or npm (Zach, 2026-11-24, HO-LYD-20261124-SGZN). Version bumps and lockfile-only changes don't count; Dependabot PRs are exempt. PRs opened before enforce_from only warn, including for a package that doesn't exist."
     },
     "telosmith": {
       "timeout_seconds": 300
