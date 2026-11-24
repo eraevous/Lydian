@@ -158,6 +158,23 @@ class TestTamperingTests(Base):
         self.write("tests/test_x.py", PY_TEST.replace("    assert 1 == 1", '    x = "#"; assert 1 == 1').replace("        self.assertTrue(True)\n", ""))
         self.assert_flags("src/focus.test.js: new test file with skips 0 -> 1", "tests/test_x.py: assertions 3 -> 2")
 
+    def test_interpolated_code_is_scanned(self):
+        self.write("src/tpl.test.js", 'const r = `${test.only("focused", () => {})}`;\n')
+        self.write("tests/test_f.py", 'x = f"{pytest.skip()}"\ny = f"{{literal}}"\n')
+        self.assert_flags("src/tpl.test.js: new test file with skips 0 -> 1", "tests/test_f.py: new test file with skips 0 -> 1")
+
+    def test_file_renamed_into_a_test_name_is_checked(self):
+        self.write("src/dormant.js", 'test.only("focused", () => {});\n')
+        self.commit("dormant")
+        self.env["KAIROS_BASE_SHA"] = git(self.repo, "rev-parse", "HEAD").strip()
+        git(self.repo, "mv", "src/dormant.js", "src/active.test.js")
+        self.assert_flags("src/active.test.js: renamed into a test name with skips 0 -> 1")
+
+    def test_plain_template_and_fstring_text_is_not_code(self):
+        counts = kit.tampering_counts("a.test.js", "const s = `expect( ${1 + 1} test.only(`;\n")
+        self.assertEqual(counts, (0, 0))
+        self.assertEqual(kit.tampering_counts("t.py", 'x = f"assert {y} pytest.skip("\n'), (0, 0))
+
     # Clean decoys it must not flag.
     def test_untouched_tests_pass(self):
         self.write("README.md", "changed\n")

@@ -631,14 +631,20 @@ def guard_result(findings, ctx, cleared_by, cases, how):
     raise KitError("; ".join(findings) + f". To accept: {how}")
 
 
-def code_only(text, python):
-    """The text with comments removed and string literals emptied, by a small scanner: a regex
-    can't tell a string holding "/*" from a comment (Codex on #29), so neither comments nor strings
-    can hide or forge an assertion or a focus marker. Not a full lexer: a JS regex literal holding a
-    quote can still confuse it."""
-    out, i, n = [], 0, len(text)
+def _scan_code(text, i, python, nested):
+    """Scan from i, keeping code and dropping comments and string contents. Code inside a JS
+    template's ${...} or a Python f-string's {...} runs, so it is scanned as code (Codex on #29).
+    With nested set, stop at the "}" that closes the interpolation. Returns (code, next index)."""
+    out, n, depth = [], len(text), 0
     while i < n:
         c = text[i]
+        if nested:
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                if depth == 0:
+                    return "".join(out), i + 1
+                depth -= 1
         if python and c == "#":
             i = text.find("\n", i)
             i = n if i < 0 else i
@@ -652,18 +658,39 @@ def code_only(text, python):
             i = n if end < 0 else end + 2
             out.append(" ")
             continue
-        quotes = "'\"" if python else "'\"`"
-        if c in quotes:
+        if c in ("'\"" if python else "'\"`"):
             close = text[i:i + 3] if python and text[i:i + 3] in ('"""', "\'\'\'") else c
+            prefix = re.search(r"[A-Za-z]*$", text[max(0, i - 3):i]).group(0).lower() if python else ""
+            interpolated = c == "`" or "f" in prefix
             j = i + len(close)
+            out.append('"')
             while j < n and not text.startswith(close, j):
-                j += 2 if text[j] == "\\" else 1
+                if text[j] == "\\":
+                    j += 2
+                elif interpolated and not python and text.startswith("${", j):
+                    code, j = _scan_code(text, j + 2, python, True)
+                    out.append(" " + code + " ")
+                elif interpolated and python and text.startswith("{{", j):
+                    j += 2
+                elif interpolated and python and text[j] == "{":
+                    code, j = _scan_code(text, j + 1, python, True)
+                    out.append(" " + code + " ")
+                else:
+                    j += 1
+            out.append('"')
             i = j + len(close)
-            out.append('""')
             continue
         out.append(c)
         i += 1
-    return "".join(out)
+    return "".join(out), i
+
+
+def code_only(text, python):
+    """The text with comments removed and string literals emptied (interpolated code kept), by a
+    small scanner: a regex can't tell a string holding "/*" from a comment (Codex on #29), so
+    neither comments nor strings can hide or forge an assertion or a focus marker. Not a full lexer:
+    a JS regex literal holding a quote can still confuse it."""
+    return _scan_code(text, 0, python, False)[0]
 
 
 def tampering_counts(path, text):
@@ -708,6 +735,12 @@ def test_tampering(root, config, policy):
                     findings.append(f"{new}: new test file with skips 0 -> {skips}")
             continue
         if not TEST_FILE.search(old):
+            # A file renamed into a test name is new to the suite: check it like an added one
+            # (Codex on #29).
+            if status[0] == "R" and TEST_FILE.search(new):
+                skips = tampering_counts(new, file_at(root, "HEAD", new) or "")[1]
+                if skips:
+                    findings.append(f"{new}: renamed into a test name with skips 0 -> {skips}")
             continue
         if status[0] == "D":
             findings.append(f"{old}: test file deleted")
