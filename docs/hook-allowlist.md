@@ -8,7 +8,7 @@ Written for handoff HO-LYDIAN-20261122-228P (Zach, 2026-11-22: "yes, with a prot
 
 ### 1. Recompute
 
-Compute the fingerprint yourself, with hook-guard's own rule, from the `.claude/settings.json` (or `.codex/hooks.json`, whose commands hook-guard holds to the same allowlist) at the head commit of the PR that needs it:
+Compute the fingerprint yourself, with hook-guard's own rule, from the `.claude/settings.json` (or `.codex/hooks.json`, or inline `[hooks]` in `.codex/config.toml`, whose commands hook-guard holds to the same allowlist) at the head commit of the PR that needs it:
 
 ```sh
 git show <head sha>:.claude/settings.json | python3 -c '
@@ -73,7 +73,7 @@ Open one PR, marked ready (not draft), titled `hook-guard: allow <what> (<first 
 
 Once the repository that needed the hook has merged it, look for fingerprints no repository uses any more:
 
-- read `.claude/settings.json` (and any committed `settings.local.json`) and `.codex/hooks.json` on the default branch of **every** repository that calls Lydian, **and** on their open PRs, before removing anything;
+- read `.claude/settings.json` (and any committed `settings.local.json`) and `.codex/hooks.json` and `.codex/config.toml` on the default branch of **every** repository that calls Lydian, **and** on their open PRs, before removing anything;
 - remove only fingerprints that none of those use, in their own PR, naming each one and what replaced it (#10 is the precedent, after the AEC lane's 63AR check);
 - remove its row in the table in the same PR.
 

@@ -495,6 +495,54 @@ class HookGuard(unittest.TestCase):
         (self.repo / "sub" / ".codex" / "config.toml").write_text("")
         self.assertEqual(self.run_guard()["gate"], "passed")
 
+    # Codex on #27 (P1): Codex also loads inline [hooks] from project .codex/config.toml.
+    def codex_toml(self, text, parts=(".codex", "config.toml")):
+        target = self.repo.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+        return target
+
+    @staticmethod
+    def inline_hook(command, extra=""):
+        return (f'[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = "command"\n'
+                f'command = {json.dumps(command)}\ntimeout = 10\n{extra}')
+
+    def test_inline_codex_hooks_in_config_toml_are_held_to_the_same_fingerprints(self):
+        self.codex_toml('[features]\nhooks = true\n' + self.inline_hook(GOOD))
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "passed", r)
+        self.codex_toml(self.inline_hook(OTHER))
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "failed", r)
+        self.assertIn(".codex/config.toml", r["modules"][0]["reason"])
+        self.assertNotIn("example.invalid", json.dumps(r))
+        self.codex_toml(self.inline_hook(GOOD, 'commandWindows = "cmd /c evil"\n'))
+        self.assertEqual(self.run_guard()["gate"], "failed")
+        self.codex_toml("hooks = 3\n")
+        self.assertEqual(self.run_guard()["gate"], "failed")
+        self.codex_toml("not = [valid toml")
+        self.assertEqual(self.run_guard()["gate"], "failed")
+
+    def test_inline_codex_hooks_outside_the_exact_root_config_fail(self):
+        for parts in ((".CODEX", "config.toml"), (".codex", "Config.toml"), (".codex.", "config.toml"),
+                      ("sub", ".codex", "config.toml")):
+            with self.subTest(parts=parts):
+                tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+                self.repo = Path(tmp.name)
+                self.codex_toml(self.inline_hook(GOOD), parts=parts)
+                r = self.run_guard()
+                self.assertEqual(r["gate"], "failed", r)
+                self.assertRegex(r["modules"][0]["reason"], "variant|outside")
+
+    def test_symlinked_codex_config_fails(self):
+        (self.repo / "config").mkdir()
+        (self.repo / "config" / "c.toml").write_text(self.inline_hook(OTHER))
+        (self.repo / ".codex").mkdir()
+        (self.repo / ".codex" / "config.toml").symlink_to(self.repo / "config" / "c.toml")
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "failed", r)
+        self.assertIn("symlink", r["modules"][0]["reason"])
+
     def test_symlinked_codex_paths_fail(self):
         (self.repo / "config").mkdir()
         (self.repo / "config" / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [{"command": OTHER}]}]}}))

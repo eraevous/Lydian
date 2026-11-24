@@ -319,8 +319,9 @@ def hook_guard(root, config, policy):
     guard keeps no fingerprints for them. It also fails if
     the repository root holds a module file, compiled file or package folder that would shadow a
     module a hook imports (aec, runpy, site, sitecustomize, ...), the trick behind Telosmith#77.
-    Codex hooks in a checked-in `.codex/hooks.json` are held to the same fingerprints, with the same
-    shape rules (HO-CRK-20261124-N4ER); any other spelling or location of that file fails.
+    Codex hooks in a checked-in `.codex/hooks.json`, or inline under [hooks] in `.codex/config.toml`,
+    are held to the same fingerprints, with the same shape rules (HO-CRK-20261124-N4ER; Codex on #27);
+    a hooks source at any other spelling or location fails.
 
     What it can't do: vet code a hook legitimately runs from the checkout (for example a repo's
     own drift script), and it can't stop a pull request that rewrites the workflow calling it.
@@ -482,11 +483,24 @@ def guard_hook_commands(rel, hooks, allowed):
     return checked
 
 
+CODEX_HOOK_FILES = ("hooks.json", "config.toml")   # Codex reads hooks from both (config.toml: inline [hooks])
+
+
+def codex_toml_declares_hooks(path):
+    """True if a Codex config.toml holds a top-level hooks key, or can't be parsed to show it doesn't."""
+    try:
+        import tomllib
+        return "hooks" in tomllib.loads(path.read_text(encoding="utf-8"))
+    except Exception:   # no tomllib (Python < 3.11), bad TOML or bytes: fail closed
+        return True
+
+
 def guard_codex_paths(root):
-    """Fail on a Codex hooks file the fingerprint stage wouldn't read: a symlink, a case or
+    """Fail on a Codex hooks source the fingerprint stage wouldn't read: a symlink, a case or
     trailing-character variant, or one in a `.codex` folder below the root (Codex layers project
-    config from the working folder up, so a session started in a subfolder may read it). Counts no cases."""
-    for rel in (".codex", ".codex/hooks.json"):
+    config from the working folder up, so a session started in a subfolder may read it). A stray
+    config.toml fails only if it declares hooks (or can't be parsed). Counts no cases."""
+    for rel in (".codex",) + tuple(f".codex/{f}" for f in CODEX_HOOK_FILES):
         if (root / rel).is_symlink():
             raise KitError("a guarded Codex hooks path is a symlink")
     for dirpath, dirnames, _filenames in os.walk(root):
@@ -497,27 +511,46 @@ def guard_codex_paths(root):
                 continue
             exact_root = here == root and d == ".codex"
             for f in (here / d).iterdir():
-                if norm(f.name) == "hooks.json" and not (exact_root and f.name == "hooks.json"):
-                    raise KitError("repository has Codex hooks outside the exact root .codex/hooks.json "
-                                   "(a case variant, a trailing dot or space, or a subfolder)")
+                if norm(f.name) not in CODEX_HOOK_FILES or (exact_root and f.name in CODEX_HOOK_FILES):
+                    continue
+                if norm(f.name) == "config.toml" and not (f.is_symlink() or not f.is_file()
+                                                          or codex_toml_declares_hooks(f)):
+                    continue
+                raise KitError("repository has Codex hooks outside the exact root .codex/hooks.json "
+                               "or .codex/config.toml (a case variant, a trailing dot or space, or a subfolder)")
 
 
 def guard_codex_hooks(root, allowed):
-    """Hold every command in the root `.codex/hooks.json` to a central fingerprint. Returns the number checked."""
+    """Hold every Codex hook command to a central fingerprint: those in the root `.codex/hooks.json`
+    and those declared inline under [hooks] in the root `.codex/config.toml` (Codex on #27; the
+    rest of config.toml isn't checked here). Returns the number checked."""
+    checked = 0
     rel = ".codex/hooks.json"
     path = within(root, rel)
-    if not path.is_file():
-        return 0
-    try:
-        body = json.loads(path.read_text(encoding="utf-8"))
-    except ValueError:
-        raise KitError(f"{rel} is not valid JSON")
-    if not isinstance(body, dict):
-        raise KitError(f"{rel} must be a JSON object")
-    if set(body) - {"hooks"}:
-        # Keys are never echoed. Nothing besides hooks is fingerprinted here, so anything else fails.
-        raise KitError(f"{rel} has a key besides hooks, which the guard doesn't know")
-    return guard_hook_commands(rel, body.get("hooks", {}), allowed)
+    if path.is_file():
+        try:
+            body = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            raise KitError(f"{rel} is not valid JSON")
+        if not isinstance(body, dict):
+            raise KitError(f"{rel} must be a JSON object")
+        if set(body) - {"hooks"}:
+            # Keys are never echoed. Nothing besides hooks is fingerprinted here, so anything else fails.
+            raise KitError(f"{rel} has a key besides hooks, which the guard doesn't know")
+        checked += guard_hook_commands(rel, body.get("hooks", {}), allowed)
+    rel = ".codex/config.toml"
+    path = within(root, rel)
+    if path.is_file():
+        try:
+            import tomllib
+            config = tomllib.loads(path.read_text(encoding="utf-8"))
+        except ImportError:
+            raise KitError(f"{rel}: this Python can't read TOML (needs 3.11 or later), so its hooks can't be checked")
+        except (ValueError, UnicodeDecodeError):
+            raise KitError(f"{rel} is not valid TOML")
+        if "hooks" in config:
+            checked += guard_hook_commands(rel, config["hooks"], allowed)
+    return checked
 
 
 CODE_IMPACT_LIMIT = 60_000   # characters kept in the job summary (GitHub allows 1 MiB per step)
