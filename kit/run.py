@@ -636,8 +636,10 @@ def tampering_counts(path, text):
     # Line comments don't count, so "assert True  # assert f() == 2" is one assertion, not two.
     # A focused test (.only) disables its siblings, so it counts as a skip.
     if path.endswith(".py"):
+        text = re.sub(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'', "", text)   # docstrings and string blocks
         text = re.sub(r"#[^\n]*", "", text)
         return len(PY_ASSERTS.findall(text)), len(PY_SKIPS.findall(text))
+    text = re.sub(r"/\*[\s\S]*?\*/", "", text)   # block comments (Codex on #29)
     text = re.sub(r"(?<![:\\])//[^\n]*", "", text)
     return len(JS_ASSERTS.findall(text)), len(JS_SKIPS.findall(text))
 
@@ -664,7 +666,15 @@ def test_tampering(root, config, policy):
         else:
             old = new = raw[i + 1]
             i += 2
-        if not TEST_FILE.search(old) or status[0] in "AC":
+        if status[0] in "AC":
+            # A new test file can't lose assertions, but a focused test in it (.only) can stop the
+            # rest of the suite running, and a skip in it hides a test (Codex P1 on #29).
+            if TEST_FILE.search(new):
+                skips = tampering_counts(new, file_at(root, "HEAD", new) or "")[1]
+                if skips:
+                    findings.append(f"{new}: new test file with skips 0 -> {skips}")
+            continue
+        if not TEST_FILE.search(old):
             continue
         if status[0] == "D":
             findings.append(f"{old}: test file deleted")
@@ -714,7 +724,7 @@ def manifest_packages(path, text):
                 for pkg, spec in section.items():
                     found[("npm", pkg)] = not (isinstance(spec, str) and NPM_LOCAL.search(spec.strip()))
         return found
-    specs = []
+    specs, self_name = [], None
     if name == "pyproject.toml":
         import tomllib
         try:
@@ -722,6 +732,7 @@ def manifest_packages(path, text):
         except tomllib.TOMLDecodeError as exc:
             raise KitError(f"{path}: not valid TOML") from exc
         project = data.get("project", {})
+        self_name = project.get("name") or data.get("tool", {}).get("poetry", {}).get("name")
         specs += project.get("dependencies", []) or []
         for group in (project.get("optional-dependencies", {}) or {}).values():
             specs += group or []
@@ -740,8 +751,11 @@ def manifest_packages(path, text):
             line = line.split(" #", 1)[0].strip()
             if line and not line.startswith(("#", "-", ".", "/")) and "://" not in line:
                 specs.append(line)
+    own = re.sub(r"[-_.]+", "-", self_name).lower() if name == "pyproject.toml" and isinstance(self_name, str) else None
     for spec in specs:
         parsed = pypi_name(spec) if isinstance(spec, str) else None
+        if parsed and parsed[0] == own:
+            continue   # a self-referencing extra (all = ["mine[a]"]) is this project, not a registry package
         if parsed:
             found[("pypi", parsed[0])] = parsed[1] and "://" not in spec
     return found
@@ -754,33 +768,64 @@ def is_manifest(path):
     return name in ("package.json", "pyproject.toml") or bool(re.fullmatch(r"requirements[^/]*\.txt", name))
 
 
-def own_names(path, text):
-    """The packages a manifest itself defines: a self-referencing extra or a workspace sibling is not
-    a registry package (dissent review on this change)."""
-    name = path.rsplit("/", 1)[-1]
+def workspace_names(root, rev):
+    """npm package names defined by the root package.json's workspaces: a sibling is local, not a
+    registry package. Only workspaces count, so a stray manifest elsewhere can't exempt a name
+    (Codex on #29)."""
+    import fnmatch
+    root_text = file_at(root, rev, "package.json")
     try:
-        if name == "package.json":
-            own = json.loads(text).get("name")
-            return {("npm", own)} if isinstance(own, str) else set()
-        if name == "pyproject.toml":
-            import tomllib
-            data = tomllib.loads(text)
-            own = data.get("project", {}).get("name") or data.get("tool", {}).get("poetry", {}).get("name")
-            return {("pypi", re.sub(r"[-_.]+", "-", own).lower())} if isinstance(own, str) else set()
+        spaces = json.loads(root_text).get("workspaces") if root_text else None
     except (ValueError, AttributeError):
-        pass
-    return set()
+        return set()
+    if isinstance(spaces, dict):
+        spaces = spaces.get("packages")
+    if not isinstance(spaces, list):
+        return set()
+    names = set()
+    for path in tracked(root, rev):
+        folder = path.rsplit("/", 1)[0] if "/" in path else ""
+        if path.endswith("/package.json") and any(isinstance(g, str) and fnmatch.fnmatch(folder, g.rstrip("/")) for g in spaces):
+            try:
+                own = json.loads(file_at(root, rev, path) or "").get("name")
+            except (ValueError, AttributeError):
+                continue
+            if isinstance(own, str):
+                names.add(("npm", own))
+    return names
 
 
 def repository_packages(root, rev):
-    packages, own = {}, set()
+    packages = {}
     for path in tracked(root, rev):
         if is_manifest(path):
-            text = file_at(root, rev, path) or ""
-            own |= own_names(path, text)
-            for key, registry in manifest_packages(path, text).items():
+            for key, registry in manifest_packages(path, file_at(root, rev, path) or "").items():
                 packages[key] = packages.get(key, False) or registry
+    own = workspace_names(root, rev)
     return {key: registry for key, registry in packages.items() if key not in own}
+
+
+def private_registries(root):
+    """Ecosystems (or npm scopes) this repository resolves through a registry other than the public
+    one. A public 404 there proves nothing, so it's reported as unconfirmed (Codex on #29)."""
+    private = set()
+    for path in tracked(root, "HEAD"):
+        name = path.rsplit("/", 1)[-1]
+        text = None
+        if name == ".npmrc":
+            text = file_at(root, "HEAD", path) or ""
+            for line in text.splitlines():
+                key = line.split("=", 1)[0].strip()
+                if key == "registry":
+                    private.add("npm")
+                elif key.startswith("@") and key.endswith(":registry"):
+                    private.add("npm:" + key[: -len(":registry")])
+        elif name in ("pip.conf", "pip.ini", "uv.toml", "poetry.toml") or (
+                is_manifest(path) and name != "package.json"):
+            text = file_at(root, "HEAD", path) or ""
+            if re.search(r"(?m)^\s*(?:--(?:extra-)?index-url|-i\s|index-url\s*=|\[\[tool\.(?:uv\.index|poetry\.source|pdm\.source)\]\]|\[\[index\]\])", text):
+                private.add("pypi")
+    return private
 
 
 def registry_status(url):
@@ -820,12 +865,16 @@ def new_dependencies(root, config, policy):
     before = repository_packages(root, ctx["base"])
     after = repository_packages(root, "HEAD")
     added = sorted(key for key in after if key not in before)
+    private = private_registries(root) if added else set()
     findings, warnings = [], []
     for ecosystem, name in added:
         if not after[(ecosystem, name)]:
             continue
         status = registry_status(registry_url(ecosystem, name))
-        if status == 404:
+        scope = f"npm:{name.split('/')[0]}" if name.startswith("@") else None
+        if status == 404 and (ecosystem in private or scope in private):
+            warnings.append(f"{ecosystem}:{name}: not on the public registry; this repository uses a private one, so unconfirmed")
+        elif status == 404:
             findings.append(f"{ecosystem}:{name}: package does not exist (possibly invented)")
         elif status != 200:
             warnings.append(f"{ecosystem}:{name}: could not reach the registry to confirm it exists ({status})")

@@ -144,6 +144,15 @@ class TestTamperingTests(Base):
         self.write("tests/test_x.py", PY_TEST.replace("assert 1 == 1", "assert True  # assert 1 == 1").replace("        self.assertTrue(True)\n", ""))
         self.assert_flags("assertions 3 -> 2")
 
+    def test_new_test_file_with_a_focused_test(self):
+        self.write("src/empty.test.js", 'test.only("nothing", () => {});\n')
+        self.assert_flags("src/empty.test.js", "new test file with skips 0 -> 1")
+
+    def test_block_comment_and_string_disable_assertions(self):
+        self.write("src/app.test.ts", JS_TEST.replace("expect(2).toBe(2);", "/* expect(2).toBe(2); */"))
+        self.write("tests/test_x.py", PY_TEST.replace("    assert 1 == 1", '    """assert 1 == 1"""'))
+        self.assert_flags("src/app.test.ts: assertions 2 -> 1", "tests/test_x.py: assertions 3 -> 2")
+
     # Clean decoys it must not flag.
     def test_untouched_tests_pass(self):
         self.write("README.md", "changed\n")
@@ -244,11 +253,27 @@ class NewDependencyTests(Base):
         self.assertEqual(self.calls, ["https://registry.npmjs.org/@scope%2Fpkg"])
 
     # Clean decoys it must not flag.
+    def test_a_stray_manifest_name_does_not_exempt_a_package(self):
+        self.write("fixtures/package.json", json.dumps({"name": "invented-pkg-zz"}))
+        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "invented-pkg-zz": "1"}}))
+        self.assert_flags("npm:invented-pkg-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
+    def test_private_registry_404_is_unconfirmed_not_invented(self):
+        self.write(".npmrc", "@corp:registry=https://npm.corp.example/\n")
+        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "@corp/invented-x": "1"}}))
+        out = self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertTrue(any("private" in w for w in out["warnings"]))
+
+    def test_private_python_index_404_is_unconfirmed(self):
+        self.write("requirements.txt", "--extra-index-url https://pypi.corp.example/simple\nrequests==2.31\ninvented-pkg-zz\n")
+        out = self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertTrue(any("private" in w for w in out["warnings"]))
+
     def test_self_extra_and_workspace_sibling_are_not_looked_up(self):
         self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27"]\n'
                    '[project.optional-dependencies]\nall = ["x[a]"]\n')
         self.write("libs/my-lib/package.json", json.dumps({"name": "my-lib"}))
-        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "my-lib": "*"}}))
+        self.write("package.json", json.dumps({"workspaces": ["libs/*"], "dependencies": {"react": "^18.0.0", "my-lib": "*"}}))
         self.assertEqual(self.run_module()["cases"], 0)
         self.assertEqual(self.calls, [])
 
