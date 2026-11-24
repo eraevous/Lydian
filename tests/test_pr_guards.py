@@ -175,6 +175,11 @@ class TestTamperingTests(Base):
         self.assertEqual(counts, (0, 0))
         self.assertEqual(kit.tampering_counts("t.py", 'x = f"assert {y} pytest.skip("\n'), (0, 0))
 
+    def test_symlinked_test_file_fails(self):
+        self.write("src/payload.js", 'test.only("focused", () => {});\n')
+        (self.repo / "src/focus.test.js").symlink_to("payload.js")
+        self.assert_flags("src/focus.test.js: a symlink")
+
     # Clean decoys it must not flag.
     def test_untouched_tests_pass(self):
         self.write("README.md", "changed\n")
@@ -268,6 +273,20 @@ class NewDependencyTests(Base):
     def test_new_manifest_in_a_subfolder(self):
         self.write("dashboard/package.json", json.dumps({"dependencies": {"vite": "5"}}))
         self.assert_flags("npm:vite")
+
+    def test_symlinked_manifest_fails(self):
+        (self.repo / "requirements.txt").unlink()
+        self.write("requests", "invented-pkg-zz\n")
+        (self.repo / "requirements.txt").symlink_to("requests")
+        self.assert_flags("requirements.txt: a symlink")
+
+    def test_local_to_registry_switch_is_new(self):
+        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "helper": "file:./helper"}}))
+        self.write("requirements.txt", "requests==2.31\nmylib @ file:///src/mylib\n")
+        self.env["KAIROS_BASE_SHA"] = self.commit("local deps")
+        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "helper": "^1.0.0"}}))
+        self.write("requirements.txt", "requests==2.31\nmylib==1.0\n")
+        self.assert_flags("npm:helper", "pypi:mylib", "no decision id")
 
     def test_npm_alias_target_is_looked_up(self):
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "helper": "npm:invented-pkg-zz@1",

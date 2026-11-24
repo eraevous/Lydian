@@ -612,6 +612,10 @@ def file_at(root, rev, path):
     listed = git_out(root, "ls-tree", "-z", rev, "--", path).split(b"\0")
     if not listed or not listed[0]:
         return None
+    if listed[0].split(b" ", 1)[0] in (b"120000", b"160000"):
+        # git show of a symlink returns its target path, not what a checkout reads through it, so a
+        # guarded file can't be a link (Codex security review on #29). A submodule has no text here.
+        raise KitError(f"{path}: a symlink or submodule; test files and manifests must be regular files")
     return git_out(root, "show", f"{rev}:{path}").decode("utf-8", "replace")
 
 
@@ -961,7 +965,9 @@ def new_dependencies(root, config, policy):
         return skipped
     before = repository_packages(root, ctx["base"])
     after = repository_packages(root, "HEAD")
-    added = sorted(key for key in after if key not in before)
+    # New, or switched from a local source (file:, path, git) to the registry: either way a registry
+    # package arrives (Codex security review on #29).
+    added = sorted(key for key in after if key not in before or (after[key] and not before[key]))
     private = private_registries(root) if added else set()
     findings, warnings = [], []
     for ecosystem, name in added:
