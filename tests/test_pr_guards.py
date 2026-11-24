@@ -288,6 +288,16 @@ class NewDependencyTests(Base):
         self.write("requirements.txt", "requests==2.31\nmylib==1.0\n")
         self.assert_flags("npm:helper", "pypi:mylib", "no decision id")
 
+    def test_local_declaration_in_another_group_does_not_mask_a_registry_one(self):
+        self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27", "invented-pkg-zz"]\n'
+                   '[project.optional-dependencies]\ndev = ["invented-pkg-zz @ file:///src/local"]\n')
+        self.assert_flags("pypi:invented-pkg-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
+    def test_build_system_requires_are_checked(self):
+        self.write("pyproject.toml", '[build-system]\nrequires = ["invented-build-zz"]\n'
+                   '[project]\nname = "x"\ndependencies = ["httpx>=0.27"]\n')
+        self.assert_flags("pypi:invented-build-zz", "no decision id")
+
     def test_npm_alias_target_is_looked_up(self):
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "helper": "npm:invented-pkg-zz@1",
                                                                  "scoped": "npm:@scope/pkg@2"}}))

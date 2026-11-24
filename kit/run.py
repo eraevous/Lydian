@@ -798,7 +798,7 @@ def manifest_packages(path, text):
                         # (Codex on #29).
                         found[("npm", alias.group(1))] = True
                         continue
-                    found[("npm", pkg)] = not (isinstance(spec, str) and NPM_LOCAL.search(spec.strip()))
+                    found[("npm", pkg)] = found.get(("npm", pkg), False) or not (isinstance(spec, str) and NPM_LOCAL.search(spec.strip()))
         return found
     specs, self_name = [], None
     if name == "pyproject.toml":
@@ -810,6 +810,8 @@ def manifest_packages(path, text):
         project = data.get("project", {})
         self_name = project.get("name") or data.get("tool", {}).get("poetry", {}).get("name")
         specs += project.get("dependencies", []) or []
+        build = data.get("build-system", {})
+        specs += [r for r in (build.get("requires", []) if isinstance(build, dict) else []) or [] if isinstance(r, str)]
         for group in (project.get("optional-dependencies", {}) or {}).values():
             specs += group or []
         for group in (data.get("dependency-groups", {}) or {}).values():
@@ -821,7 +823,8 @@ def manifest_packages(path, text):
             for pkg, spec in (table or {}).items():
                 if pkg.lower() != "python":
                     local = isinstance(spec, dict) and any(k in spec for k in ("path", "git", "url"))
-                    found[("pypi", re.sub(r"[-_.]+", "-", pkg).lower())] = not local
+                    key = ("pypi", re.sub(r"[-_.]+", "-", pkg).lower())
+                    found[key] = found.get(key, False) or not local
     else:   # requirements*.txt
         for line in text.splitlines():
             line = line.split(" #", 1)[0].strip()
@@ -833,7 +836,8 @@ def manifest_packages(path, text):
         if parsed and parsed[0] == own:
             continue   # a self-referencing extra (all = ["mine[a]"]) is this project, not a registry package
         if parsed:
-            found[("pypi", parsed[0])] = parsed[1] and "://" not in spec
+            # OR across declarations: a local one in another group can't mask a registry one (Codex on #29).
+            found[("pypi", parsed[0])] = found.get(("pypi", parsed[0]), False) or (parsed[1] and "://" not in spec)
     return found
 
 
