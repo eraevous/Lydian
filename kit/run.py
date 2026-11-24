@@ -647,6 +647,20 @@ def _regex_can_start(code):
         return True
     if stripped[-1] in "(,=:[!&|?{};+-*%<>~^":
         return True
+    if stripped[-1] == ")":
+        # After the condition of if/while/for/with, a "/" starts the body, so it's a regex
+        # (Codex on #29). Find the matching "(" in the scanned code (comments and strings are
+        # already gone) and look at the word before it.
+        depth = 0
+        for k in range(len(stripped) - 1, -1, -1):
+            if stripped[k] == ")":
+                depth += 1
+            elif stripped[k] == "(":
+                depth -= 1
+                if depth == 0:
+                    before = re.search(r"[A-Za-z_$][\w$]*$", stripped[:k].rstrip())
+                    return bool(before) and before.group(0) in ("if", "while", "for", "with")
+        return False
     word = re.search(r"[A-Za-z_$][\w$]*$", stripped)
     return bool(word) and word.group(0) in REGEX_KEYWORDS
 

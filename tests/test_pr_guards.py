@@ -192,6 +192,12 @@ class TestTamperingTests(Base):
         self.write("src/ctl.test.js", 'if (true) /can\'t/.test("x");\ntest.only("focused", () => {});\n')
         self.assert_flags("src/ctl.test.js: new test file with skips 0 -> 1")
 
+    def test_regex_after_a_control_condition_on_the_same_line(self):
+        self.write("src/ctl2.test.js", "if (true) /can't/.test(\"x\"); test.only('focused', () => {});\n"
+                   "while (f(a)) /'/.exec(s); test.skip('s', () => {});\nconst q = g(x) / 2; expect(q).toBe(1);\n")
+        self.assert_flags("src/ctl2.test.js: new test file with skips 0 -> 2")
+        self.assertEqual(kit.tampering_counts("a.test.js", "const q = g(x) / 2; expect(q).toBe(1); const r = h(y) / 3;\n"), (1, 0))
+
     # Clean decoys it must not flag.
     def test_untouched_tests_pass(self):
         self.write("README.md", "changed\n")
