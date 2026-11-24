@@ -631,16 +631,49 @@ def guard_result(findings, ctx, cleared_by, cases, how):
     raise KitError("; ".join(findings) + f". To accept: {how}")
 
 
+def code_only(text, python):
+    """The text with comments removed and string literals emptied, by a small scanner: a regex
+    can't tell a string holding "/*" from a comment (Codex on #29), so neither comments nor strings
+    can hide or forge an assertion or a focus marker. Not a full lexer: a JS regex literal holding a
+    quote can still confuse it."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if python and c == "#":
+            i = text.find("\n", i)
+            i = n if i < 0 else i
+            continue
+        if not python and text.startswith("//", i):
+            i = text.find("\n", i)
+            i = n if i < 0 else i
+            continue
+        if not python and text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            out.append(" ")
+            continue
+        quotes = "'\"" if python else "'\"`"
+        if c in quotes:
+            close = text[i:i + 3] if python and text[i:i + 3] in ('"""', "\'\'\'") else c
+            j = i + len(close)
+            while j < n and not text.startswith(close, j):
+                j += 2 if text[j] == "\\" else 1
+            i = j + len(close)
+            out.append('""')
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def tampering_counts(path, text):
-    """(assertions, skips) in one test file, by language. Comments and strings count too: it's a diff signal."""
-    # Line comments don't count, so "assert True  # assert f() == 2" is one assertion, not two.
-    # A focused test (.only) disables its siblings, so it counts as a skip.
+    """(assertions, skips) in one test file, by language, counted in code only: comments and string
+    contents don't count, so "assert True  # assert f() == 2" is one assertion. A focused test
+    (.only) disables its siblings, so it counts as a skip."""
     if path.endswith(".py"):
-        text = re.sub(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'', "", text)   # docstrings and string blocks
-        text = re.sub(r"#[^\n]*", "", text)
+        text = code_only(text, True)
         return len(PY_ASSERTS.findall(text)), len(PY_SKIPS.findall(text))
-    text = re.sub(r"/\*[\s\S]*?\*/", "", text)   # block comments (Codex on #29)
-    text = re.sub(r"(?<![:\\])//[^\n]*", "", text)
+    text = code_only(text, False)
     return len(JS_ASSERTS.findall(text)), len(JS_SKIPS.findall(text))
 
 
@@ -805,26 +838,51 @@ def repository_packages(root, rev):
     return {key: registry for key, registry in packages.items() if key not in own}
 
 
+PUBLIC_REGISTRY_HOSTS = {"registry.npmjs.org", "registry.yarnpkg.com", "pypi.org", "pypi.python.org",
+                         "files.pythonhosted.org"}
+
+
+def is_private_url(url):
+    from urllib.parse import urlparse
+    host = (urlparse(url.strip().strip("\"'")).hostname or "").lower()
+    return bool(host) and host not in PUBLIC_REGISTRY_HOSTS
+
+
 def private_registries(root):
     """Ecosystems (or npm scopes) this repository resolves through a registry other than the public
-    one. A public 404 there proves nothing, so it's reported as unconfirmed (Codex on #29)."""
+    one. A public 404 there proves nothing, so it's reported as unconfirmed (Codex on #29). Only a
+    configured URL whose host isn't the public registry counts: configuring the public registry
+    explicitly exempts nothing (Codex on #29)."""
+    import tomllib
     private = set()
     for path in tracked(root, "HEAD"):
         name = path.rsplit("/", 1)[-1]
-        text = None
         if name == ".npmrc":
-            text = file_at(root, "HEAD", path) or ""
-            for line in text.splitlines():
-                key = line.split("=", 1)[0].strip()
-                if key == "registry":
+            for line in (file_at(root, "HEAD", path) or "").splitlines():
+                key, _, value = line.partition("=")
+                key = key.strip()
+                if key == "registry" and is_private_url(value):
                     private.add("npm")
-                elif key.startswith("@") and key.endswith(":registry"):
+                elif key.startswith("@") and key.endswith(":registry") and is_private_url(value):
                     private.add("npm:" + key[: -len(":registry")])
-        elif name in ("pip.conf", "pip.ini", "uv.toml", "poetry.toml") or (
-                is_manifest(path) and name != "package.json"):
-            text = file_at(root, "HEAD", path) or ""
-            if re.search(r"(?m)^\s*(?:--(?:extra-)?index-url|-i\s|index-url\s*=|\[\[tool\.(?:uv\.index|poetry\.source|pdm\.source)\]\]|\[\[index\]\])", text):
-                private.add("pypi")
+        elif name in ("pyproject.toml", "uv.toml"):
+            try:
+                data = tomllib.loads(file_at(root, "HEAD", path) or "")
+            except tomllib.TOMLDecodeError:
+                continue
+            tool = data.get("tool", {}) if isinstance(data.get("tool"), dict) else {}
+            entries = [data.get("index"), tool.get("uv", {}).get("index") if isinstance(tool.get("uv"), dict) else None,
+                       tool.get("poetry", {}).get("source") if isinstance(tool.get("poetry"), dict) else None,
+                       tool.get("pdm", {}).get("source") if isinstance(tool.get("pdm"), dict) else None]
+            for group in entries:
+                for entry in group if isinstance(group, list) else []:
+                    if isinstance(entry, dict) and isinstance(entry.get("url"), str) and is_private_url(entry["url"]):
+                        private.add("pypi")
+        elif name in ("pip.conf", "pip.ini") or (is_manifest(path) and name != "package.json"):
+            for match in re.finditer(r"(?m)^\s*(?:--(?:extra-)?index-url|-i|(?:extra-)?index-url)\s*[=\s]\s*(\S+)",
+                                     file_at(root, "HEAD", path) or ""):
+                if is_private_url(match.group(1)):
+                    private.add("pypi")
     return private
 
 

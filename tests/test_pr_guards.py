@@ -153,6 +153,11 @@ class TestTamperingTests(Base):
         self.write("tests/test_x.py", PY_TEST.replace("    assert 1 == 1", '    """assert 1 == 1"""'))
         self.assert_flags("src/app.test.ts: assertions 2 -> 1", "tests/test_x.py: assertions 3 -> 2")
 
+    def test_comment_delimiters_in_strings_hide_nothing(self):
+        self.write("src/focus.test.js", 'const start = "/*";\ntest.only("focused", () => {});\nconst end = "*/";\n')
+        self.write("tests/test_x.py", PY_TEST.replace("    assert 1 == 1", '    x = "#"; assert 1 == 1').replace("        self.assertTrue(True)\n", ""))
+        self.assert_flags("src/focus.test.js: new test file with skips 0 -> 1", "tests/test_x.py: assertions 3 -> 2")
+
     # Clean decoys it must not flag.
     def test_untouched_tests_pass(self):
         self.write("README.md", "changed\n")
@@ -261,6 +266,18 @@ class NewDependencyTests(Base):
     def test_private_registry_404_is_unconfirmed_not_invented(self):
         self.write(".npmrc", "@corp:registry=https://npm.corp.example/\n")
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "@corp/invented-x": "1"}}))
+        out = self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertTrue(any("private" in w for w in out["warnings"]))
+
+    def test_public_registry_configured_explicitly_exempts_nothing(self):
+        self.write(".npmrc", "registry=https://registry.npmjs.org/\n")
+        self.write("requirements.txt", "--index-url https://pypi.org/simple\nrequests==2.31\ninvented-pkg-zz\n")
+        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "invented-npm-zz": "1"}}))
+        self.assert_flags("npm:invented-npm-zz", "pypi:invented-pkg-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
+    def test_private_uv_index_in_pyproject_is_unconfirmed(self):
+        self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27", "invented-pkg-zz"]\n'
+                   '[[tool.uv.index]]\nname = "corp"\nurl = "https://pypi.corp.example/simple"\n')
         out = self.run_module(KAIROS_PR_BODY="DEC-1")
         self.assertTrue(any("private" in w for w in out["warnings"]))
 
