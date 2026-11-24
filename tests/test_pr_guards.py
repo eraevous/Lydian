@@ -302,6 +302,19 @@ class NewDependencyTests(Base):
                    '[project]\nname = "x"\ndependencies = ["httpx>=0.27"]\n')
         self.assert_flags("pypi:invented-build-zz", "no decision id")
 
+    def test_uv_local_source_is_not_looked_up_but_needs_a_decision(self):
+        self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27", "invented-local-zz"]\n'
+                   '[tool.uv.sources]\ninvented-local-zz = { path = "libs/local" }\n')
+        self.assert_flags("pypi:invented-local-zz", "no decision id")
+        self.calls.clear()
+        self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertEqual(self.calls, [])
+
+    def test_uv_index_source_is_still_looked_up(self):
+        self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27", "invented-pkg-zz"]\n'
+                   '[tool.uv.sources]\ninvented-pkg-zz = { index = "pypi" }\n')
+        self.assert_flags("possibly invented", KAIROS_PR_BODY="DEC-1")
+
     def test_npm_alias_target_is_looked_up(self):
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "helper": "npm:invented-pkg-zz@1",
                                                                  "scoped": "npm:@scope/pkg@2"}}))

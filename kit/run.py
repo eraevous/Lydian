@@ -838,6 +838,18 @@ def manifest_packages(path, text):
         if parsed:
             # OR across declarations: a local one in another group can't mask a registry one (Codex on #29).
             found[("pypi", parsed[0])] = found.get(("pypi", parsed[0]), False) or (parsed[1] and "://" not in spec)
+    if name == "pyproject.toml":
+        # uv resolves a name through [tool.uv.sources] wherever it is declared: a path, git, url or
+        # workspace source makes it local, so the registry lookup is skipped (a decision id is still
+        # needed). An `index` source stays a registry package (Codex on #29).
+        tool = data.get("tool", {}) if isinstance(data.get("tool"), dict) else {}
+        uv = tool.get("uv", {}) if isinstance(tool.get("uv"), dict) else {}
+        sources = uv.get("sources", {}) if isinstance(uv.get("sources"), dict) else {}
+        for pkg, source in sources.items():
+            entries = source if isinstance(source, list) else [source]
+            key = ("pypi", re.sub(r"[-_.]+", "-", pkg).lower())
+            if key in found and entries and all(isinstance(e, dict) and any(k in e for k in ("path", "git", "url", "workspace")) for e in entries):
+                found[key] = False
     return found
 
 
