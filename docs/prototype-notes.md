@@ -15,6 +15,7 @@
 >   tests as the README shows.
 > - The Telosmith pin lives in `.github/workflows/kairos-checks.yml`, not the SHA
 >   quoted for the pilot below.
+> - "Coordinator" below is the orchestrator agent (Kairos glossary, DEC-255).
 
 This is a bounded, unpublished prototype. It is not installed in any repository's
 CI, and no ruleset, workflow, repository setting, branch or remote file was changed.
