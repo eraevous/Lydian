@@ -269,6 +269,12 @@ class NewDependencyTests(Base):
         self.write("dashboard/package.json", json.dumps({"dependencies": {"vite": "5"}}))
         self.assert_flags("npm:vite")
 
+    def test_npm_alias_target_is_looked_up(self):
+        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "helper": "npm:invented-pkg-zz@1",
+                                                                 "scoped": "npm:@scope/pkg@2"}}))
+        self.assert_flags("npm:invented-pkg-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+        self.assertIn("https://registry.npmjs.org/@scope%2Fpkg", self.calls)
+
     def test_scoped_npm_name_is_quoted_in_the_url(self):
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "@scope/pkg": "1"}}))
         self.run_module(KAIROS_PR_BODY="DEC-1")

@@ -788,6 +788,12 @@ def manifest_packages(path, text):
             section = data.get(key) if isinstance(data, dict) else None
             if isinstance(section, dict):
                 for pkg, spec in section.items():
+                    alias = re.match(r"npm:(@?[^@\s]+)", spec.strip()) if isinstance(spec, str) else None
+                    if alias:
+                        # An alias installs a registry package under another name: check the target
+                        # (Codex on #29).
+                        found[("npm", alias.group(1))] = True
+                        continue
                     found[("npm", pkg)] = not (isinstance(spec, str) and NPM_LOCAL.search(spec.strip()))
         return found
     specs, self_name = [], None
