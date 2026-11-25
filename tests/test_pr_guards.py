@@ -480,6 +480,10 @@ class TestTamperingTests(Base):
         self.write("src/app.test.ts", JS_TEST + "describe('suite', () => {\n  test.skip(`works`, () => {});\n});\n")
         self.run_module()
 
+    def test_division_after_a_keyword_named_property_hides_nothing(self):
+        self.write("src/prop.test.js", 'const obj = {return: 2}; const x = obj.return / 2; fit("focused", () => {}); /x/.test("x");\n')
+        self.assert_flags("src/prop.test.js: new test file with skips 0 -> 1")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
@@ -807,6 +811,12 @@ class NewDependencyTests(Base):
                    '[tool.uv.sources]\ninvented-corp-zz = { index = "corp" }\n')
         out = self.run_module(KAIROS_PR_BODY="DEC-1")
         self.assertTrue(any("private" in w for w in out["warnings"]))
+
+    def test_marker_limited_explicit_index_assignment_is_not_private(self):
+        self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27", "invented-corp-zz"]\n'
+                   '[[tool.uv.index]]\nname = "corp"\nurl = "https://pypi.corp.example/simple"\nexplicit = true\n'
+                   '[tool.uv.sources]\ninvented-corp-zz = { index = "corp", marker = "sys_platform == \'win32\'" }\n')
+        self.assert_flags("pypi:invented-corp-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
 
     def test_version_bump_is_not_new(self):
         self.write("requirements.txt", "requests==2.32\n")

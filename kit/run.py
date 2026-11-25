@@ -724,8 +724,9 @@ def _regex_can_start(code):
                     before = re.search(r"[A-Za-z_$][\w$]*$", stripped[:k].rstrip())
                     return bool(before) and before.group(0) in ("if", "while", "for", "with")
         return False
-    word = re.search(r"[A-Za-z_$][\w$]*$", stripped)
-    return bool(word) and word.group(0) in REGEX_KEYWORDS
+    word = re.search(r"(\.\s*)?([A-Za-z_$][\w$]*)$", stripped)
+    # After a dot the word is a property name (obj.return / 2), not a keyword (Codex on #29).
+    return bool(word) and not word.group(1) and word.group(2) in REGEX_KEYWORDS
 
 
 def _scan_code(text, i, python, nested):
@@ -1515,7 +1516,9 @@ def private_registries(root):
             uv = tool.get("uv") if isinstance(tool.get("uv"), dict) else {}
             for pkg, src in (uv.get("sources") or {}).items() if isinstance(uv.get("sources"), dict) else []:
                 for one in src if isinstance(src, list) else [src]:
-                    if isinstance(one, dict) and isinstance(one.get("index"), str):
+                    # A marker limits the assignment to some platforms; elsewhere the package comes
+                    # from PyPI, so it grants no exemption (Codex on #29).
+                    if isinstance(one, dict) and isinstance(one.get("index"), str) and not one.get("marker"):
                         assigned.setdefault(one["index"], set()).add(pkg)
             poetry = tool.get("poetry") if isinstance(tool.get("poetry"), dict) else {}
             tables = [poetry.get("dependencies"), poetry.get("dev-dependencies")]
