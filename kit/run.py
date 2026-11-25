@@ -815,8 +815,10 @@ def marker_lines(path, text):
             if python:
                 name = next((d.group(1) for later in rows[n:] for d in [re.search(r"\bdef\s+(\w+)", later)] if d), "")
             else:
-                d = re.search(r'[0-9a-f]{8}"', line[m.end():])
-                name = d.group(0) if d else ""
+                # Every string between the marker and the test body: a modifier's arguments
+                # (skipIf(cond)) and the test's name, but not the body (Codex on #29).
+                tail = re.split(r"=>|\bfunction\b|\{", line[m.end():], maxsplit=1)[0]
+                name = " ".join(re.findall(r'[0-9a-f]{8}"', tail))
             marks[f"{head} {name}"] += 1
     return marks
 
