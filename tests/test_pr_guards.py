@@ -445,6 +445,14 @@ class TestTamperingTests(Base):
         self.write("tests/test_pm.py", body % ("", mark))
         self.assert_flags("tests/test_pm.py: 1 new skip or focus marker(s)")
 
+    def test_jest_focus_aliases_are_markers(self):
+        self.write("src/new.test.js", 'fit("focused", () => { expect(1).toBe(1); });\nfdescribe("suite", () => {});\n')
+        self.assert_flags("src/new.test.js: new test file with skips 0 -> 2")
+
+    def test_fit_inside_a_longer_name_is_not_a_marker(self):
+        self.write("src/fitting.test.js", 'const r = model.fit(x); profit(1); outfit("a");\ntest("works", () => { expect(r).toBe(1); });\n')
+        self.run_module()
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 

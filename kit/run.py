@@ -580,7 +580,7 @@ PY_ASSERTS = re.compile(r"(?<![\w.])assert\b|\.\s*assert[A-Z_]\w*\s*\(")
 PY_SKIPS = re.compile(r"\bmark\s*\.\s*(?:skip|skipif|xfail)\b|\bunittest\s*\.\s*(?:skip|skipIf|skipUnless|expectedFailure)\b"
                       r"|\bpytest\s*\.\s*(?:skip|xfail)\s*\(|\.\s*skipTest\s*\(")
 JS_ASSERTS = re.compile(r"(?<![\w.$])expect\s*\(|(?<![\w.$])assert\b")
-JS_SKIPS = re.compile(r"\.\s*(?:skip|skipIf|only|todo)(?=\s*[.(])|(?<![\w.$])x(?:it|test|describe)(?=\s*[.(])")   # also .only.each(...) (Codex on #29)
+JS_SKIPS = re.compile(r"\.\s*(?:skip|skipIf|only|todo)(?=\s*[.(])|(?<![\w.$])(?:x(?:it|test|describe)|f(?:it|describe))(?=\s*[.(])")   # also .only.each(...); fit/fdescribe focus like .only (Codex on #29)
 BOTS_EXEMPT = ("dependabot[bot]",)
 
 
