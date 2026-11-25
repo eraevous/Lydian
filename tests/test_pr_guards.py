@@ -463,6 +463,13 @@ class TestTamperingTests(Base):
         self.write("src/app.test.ts", JS_TEST + 'const n = 2; test. skip("later", () => {});\n')
         self.run_module()
 
+    def test_moving_an_inline_skip_between_one_line_tests_is_seen(self):
+        body = 'import pytest\n\ndef test_a(): %s\n\ndef test_b(): %s\n'
+        self.write("tests/test_inline.py", body % ('pytest.skip("unavailable")', "assert True"))
+        self.env["KAIROS_BASE_SHA"] = self.commit("skip a")
+        self.write("tests/test_inline.py", body % ("assert True", 'pytest.skip("unavailable")'))
+        self.assert_flags("tests/test_inline.py: 1 new skip or focus marker(s)")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 

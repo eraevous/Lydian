@@ -980,6 +980,12 @@ def marker_lines(path, text):
                 indent = len(code[line_start:m.start()]) - len(code[line_start:m.start()].lstrip())
                 name, def_at = "", None
                 pos = line_start
+                # A one-line definition (def test_a(): pytest.skip(...)) owns a skip on its own
+                # line (Codex on #29).
+                inline = re.match(r"[ \t]*(?:async\s+)?(def|class)\s+(\w+)", code[line_start:m.start()])
+                if inline:
+                    name = inline.group(2) if inline.group(1) == "def" else f"class {inline.group(2)}"
+                    def_at, pos = line_start, 0
                 while pos > 0 and indent > 0:
                     prev = code.rfind("\n", 0, pos - 1) + 1
                     row = code[prev:pos - 1] if pos - 1 >= prev else ""
