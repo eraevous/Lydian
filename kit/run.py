@@ -578,7 +578,7 @@ TEST_FILE = re.compile(r"(?:^|/)(?:test[^/]*\.py|[^/]*_test\.py|tests\.py|[^/]*\
 # still runs, so every pattern allows it (Codex on #29).
 PY_ASSERTS = re.compile(r"(?<![\w.])assert\b|\.\s*assert[A-Z_]\w*\s*\(")
 PY_SKIPS = re.compile(r"\bmark\s*\.\s*(?:skip|skipif|xfail)\b|\bunittest\s*\.\s*(?:skip|skipIf|skipUnless|expectedFailure)\b"
-                      r"|\bpytest\s*\.\s*(?:skip|xfail)\s*\(|\.\s*skipTest\s*\(")
+                      r"|\bpytest\s*\.\s*(?:skip|xfail|importorskip)\s*\(|\.\s*skipTest\s*\(")
 JS_ASSERTS = re.compile(r"(?<![\w.$])expect\s*\(|(?<![\w.$])assert\b")
 JS_SKIPS = re.compile(r"\.\s*(?:skip|skipIf|only|todo)(?=\s*[.(])|(?<![\w.$])(?:x(?:it|test|describe)|f(?:it|describe))(?=\s*[.(])")   # also .only.each(...); fit/fdescribe focus like .only (Codex on #29)
 BOTS_EXEMPT = ("dependabot[bot]",)
@@ -1503,10 +1503,30 @@ def private_registries(root):
             entries = [data.get("index"), tool.get("uv", {}).get("index") if isinstance(tool.get("uv"), dict) else None,
                        tool.get("poetry", {}).get("source") if isinstance(tool.get("poetry"), dict) else None,
                        tool.get("pdm", {}).get("source") if isinstance(tool.get("pdm"), dict) else None]
+            # An explicit index (uv `explicit = true`, Poetry `priority = "explicit"`) serves only
+            # the packages assigned to it, so it exempts those packages, not the folder (Codex on #29).
+            assigned = {}
+            uv = tool.get("uv") if isinstance(tool.get("uv"), dict) else {}
+            for pkg, src in (uv.get("sources") or {}).items() if isinstance(uv.get("sources"), dict) else []:
+                for one in src if isinstance(src, list) else [src]:
+                    if isinstance(one, dict) and isinstance(one.get("index"), str):
+                        assigned.setdefault(one["index"], set()).add(pkg)
+            poetry = tool.get("poetry") if isinstance(tool.get("poetry"), dict) else {}
+            tables = [poetry.get("dependencies"), poetry.get("dev-dependencies")]
+            tables += [g.get("dependencies") for g in (poetry.get("group") or {}).values() if isinstance(g, dict)] if isinstance(poetry.get("group"), dict) else []
+            for table in tables:
+                for pkg, spec in (table or {}).items() if isinstance(table, dict) else []:
+                    for one in spec if isinstance(spec, list) else [spec]:
+                        if isinstance(one, dict) and isinstance(one.get("source"), str):
+                            assigned.setdefault(one["source"], set()).add(pkg)
             for group in entries:
                 for entry in group if isinstance(group, list) else []:
                     if isinstance(entry, dict) and isinstance(entry.get("url"), str) and is_private_url(entry["url"]):
-                        private.add(("pypi", folder))
+                        if entry.get("explicit") is True or entry.get("priority") == "explicit":
+                            for pkg in assigned.get(entry.get("name"), ()):
+                                private.add(("pypi:pkg:" + re.sub(r"[-_.]+", "-", pkg).lower(), folder))
+                        else:
+                            private.add(("pypi", folder))
         elif is_manifest(path) and name != "package.json":
             # pip applies an index option from any file in a -r chain to the whole run, so a
             # requirements file is private if it or anything it includes sets a private index
@@ -1622,7 +1642,8 @@ def new_dependencies(root, config, policy):
         scope = f"npm:{name.split('/')[0]}" if name.startswith("@") else None
         manifests = where.get((ecosystem, name), set())
         if status == 404 and (privately_resolved(ecosystem, manifests, private, spaces)
-                              or (scope and privately_resolved(scope, manifests, private, spaces))):
+                              or (scope and privately_resolved(scope, manifests, private, spaces))
+                              or (ecosystem == "pypi" and privately_resolved(f"pypi:pkg:{name}", manifests, private, spaces))):
             warnings.append(f"{ecosystem}:{name}: not on the public registry; this repository uses a private one, so unconfirmed")
         elif status == 404:
             findings.append(f"{ecosystem}:{name}: package does not exist (possibly invented)")

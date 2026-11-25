@@ -470,6 +470,10 @@ class TestTamperingTests(Base):
         self.write("tests/test_inline.py", body % ("assert True", 'pytest.skip("unavailable")'))
         self.assert_flags("tests/test_inline.py: 1 new skip or focus marker(s)")
 
+    def test_importorskip_is_a_skip(self):
+        self.write("tests/test_ios.py", 'import pytest\n\ndef test_a():\n    pytest.importorskip("unavailable_module")\n    assert True\n')
+        self.assert_flags("tests/test_ios.py: new test file with skips 0 -> 1")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
@@ -771,6 +775,18 @@ class NewDependencyTests(Base):
 
     def test_continued_index_url_is_private(self):
         self.write("requirements.txt", "--index-url \\\nhttps://pypi.corp.example/simple\nrequests==2.31\ninvented-corp-zz\n")
+        out = self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertTrue(any("private" in w for w in out["warnings"]))
+
+    def test_explicit_uv_index_does_not_cover_unassigned_packages(self):
+        self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27", "invented-public-package-zz"]\n'
+                   '[[tool.uv.index]]\nname = "corp"\nurl = "https://pypi.corp.example/simple"\nexplicit = true\n')
+        self.assert_flags("pypi:invented-public-package-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
+    def test_explicit_uv_index_covers_its_assigned_package(self):
+        self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["httpx>=0.27", "invented-corp-zz"]\n'
+                   '[[tool.uv.index]]\nname = "corp"\nurl = "https://pypi.corp.example/simple"\nexplicit = true\n'
+                   '[tool.uv.sources]\ninvented-corp-zz = { index = "corp" }\n')
         out = self.run_module(KAIROS_PR_BODY="DEC-1")
         self.assertTrue(any("private" in w for w in out["warnings"]))
 
