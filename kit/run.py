@@ -801,29 +801,54 @@ def tampering_counts(path, text):
     return len(JS_ASSERTS.findall(text)), len(JS_SKIPS.findall(text))
 
 
+def _enclosing_class(code, pos):
+    """The class a definition at `pos` sits in: the nearest `class` line above it with less
+    indentation, provided no line between them dedents to the class's level or further."""
+    line_start = code.rfind("\n", 0, pos) + 1
+    line = code[line_start:code.find("\n", line_start) if "\n" in code[line_start:] else len(code)]
+    indent = len(line) - len(line.lstrip(" \t"))
+    rows = code[:line_start].splitlines()
+    for row in reversed(rows):
+        if not row.strip():
+            continue
+        row_indent = len(row) - len(row.lstrip(" \t"))
+        if row_indent < indent:
+            c = re.match(r"[ \t]*class\s+(\w+)", row)
+            if c:
+                return c.group(1)
+            indent = row_indent   # an enclosing block that isn't a class: keep looking above it
+            if indent == 0:
+                return ""
+    return ""
+
+
 def _registration_args(rest):
     """The registration's own arguments: from after the marker up to its callback body (=>,
     function, {) or the end of its call, whichever comes first, so the strings of a following
     statement aren't read into a callback-less registration such as test.todo("x"); (Codex on
     #29). Chained calls (skipIf(cond)("name", ...), .each([...])(...)) are followed through."""
-    depth, opened = 0, False
+    stack, opened = [], False
     for k, ch in enumerate(rest):
         # `function` only as a whole keyword: an identifier like functionUnavailable is part of the
         # arguments (Codex on #29).
         keyword = (rest.startswith("function", k) and not (k and (rest[k - 1].isalnum() or rest[k - 1] in "_$"))
                    and not re.match(r"[\w$]", rest[k + 8:k + 9]))
-        if rest.startswith("=>", k) or ch == "{" or keyword:
+        # Inside .each([...]) data, { and => belong to the data (Codex on #29); outside any
+        # array they start the callback body.
+        in_data = "[" in stack
+        if not in_data and (rest.startswith("=>", k) or ch == "{" or keyword):
             return rest[:k]
-        if ch in "([":
-            depth += 1
+        if ch in "([{":
+            stack.append(ch)
             opened = True
-        elif ch in ")]":
-            depth -= 1
-            if depth <= 0 and opened:
+        elif ch in ")]}":
+            if stack:
+                stack.pop()
+            if not stack and opened and ch != "}":
                 nxt = rest[k + 1:].lstrip()
                 if not nxt.startswith(("(", ".")):
                     return rest[:k + 1]
-        elif ch == ";" and depth <= 0:
+        elif ch == ";" and not stack:
             return rest[:k]
     return rest
 
@@ -849,14 +874,22 @@ def marker_lines(path, text):
                 # A decorator belongs to the definition below it.
                 d = re.search(r"\bdef\s+(\w+)", after)
                 name = d.group(1) if d else ""
+                def_at = m.end() + d.start() if d else None
             else:
                 # A runtime skip (pytest.skip(), self.skipTest(), pytestmark = ...) belongs to the
                 # test it sits in: the nearest def above with less indentation (Codex on #29).
                 indent = len(code[line_start:m.start()]) - len(code[line_start:m.start()].lstrip())
                 name = ""
+                def_at = None
                 for d in re.finditer(r"(?m)^([ \t]*)(?:async\s+)?def\s+(\w+)", code[:line_start]):
                     if len(d.group(1)) < indent:
-                        name = d.group(2)
+                        name, def_at = d.group(2), d.start()
+            if def_at is not None:
+                # Qualify with the enclosing class: A.test_x and B.test_x are different tests
+                # (Codex on #29).
+                owner = _enclosing_class(code, def_at)
+                if owner:
+                    name = f"{owner}.{name}"
         else:
             # Every string between the marker and the test body or the end of its call: a
             # modifier's arguments (skipIf(cond)) and the test's name, not the body (Codex on #29).

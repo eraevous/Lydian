@@ -335,6 +335,21 @@ class TestTamperingTests(Base):
         self.write("tests/test_rt.py", "import pytest\n\ndef test_a():\n    assert 2\n\ndef test_b():\n    pytest.skip(\"x\")\n")
         self.assert_flags("tests/test_rt.py: 1 new skip or focus marker(s)")
 
+    def test_moving_a_skip_between_object_data_parameterized_tests_is_seen(self):
+        self.write("src/app.test.ts", JS_TEST + 'test.skip.each([{value: 1}])("a", () => {});\ntest.each([{value: 1}])("b", () => {});\n')
+        self.env["KAIROS_BASE_SHA"] = self.commit("skip each a")
+        self.write("src/app.test.ts", JS_TEST + 'test.each([{value: 1}])("a", () => {});\ntest.skip.each([{value: 1}])("b", () => {});\n')
+        self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
+
+    def test_moving_a_skip_between_same_named_methods_in_two_classes_is_seen(self):
+        body = ("import unittest\n\nclass A(unittest.TestCase):\n    def test_feature(self):\n%s        self.assertTrue(1)\n\n"
+                "class B(unittest.TestCase):\n    def test_feature(self):\n%s        self.assertTrue(1)\n")
+        skip = '        self.skipTest("unavailable")\n'
+        self.write("tests/test_cls.py", body % (skip, ""))
+        self.env["KAIROS_BASE_SHA"] = self.commit("skip in A")
+        self.write("tests/test_cls.py", body % ("", skip))
+        self.assert_flags("tests/test_cls.py: 1 new skip or focus marker(s)")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
