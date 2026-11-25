@@ -1070,7 +1070,8 @@ def test_tampering(root, config, policy):
 
 
 PEP508_NAME = re.compile(r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*(?:\[[^\]]*\])?\s*(@)?")
-NPM_LOCAL = re.compile(r"^(?:file|link|workspace|portal|git|git\+\w+|https?|github|npm):|^[\w.-]+/[\w.-]+(?:#.*)?$")
+# A folder spec (./x, ../x, /x, ~/x) is a package on the local filesystem (Codex on #29).
+NPM_LOCAL = re.compile(r"^(?:file|link|workspace|portal|git|git\+\w+|https?|github|npm):|^[\w.-]+/[\w.-]+(?:#.*)?$|^(?:\.{1,2}|~)?/|^\.{1,2}$")
 
 
 def pypi_name(spec):
@@ -1222,6 +1223,10 @@ def _semver_satisfies(version, spec):
     workspace only when its version satisfies the range: Codex on #29)."""
     if spec.strip() in ("", "*"):
         return True
+    # Prereleases follow their own matching rules in npm (^1.0.0 does not take 1.0.0-beta.1): leave
+    # them unknown so the registry checks stay (Codex on #29).
+    if re.search(r"\d-[0-9A-Za-z]", version or "") or re.search(r"\d-[0-9A-Za-z]", spec):
+        return None
     v = _semver(version or "")
     if v is None:
         return None

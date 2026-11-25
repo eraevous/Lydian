@@ -634,6 +634,19 @@ class NewDependencyTests(Base):
         self.assertEqual(self.run_module()["cases"], 0)
         self.assertEqual(self.calls, [])
 
+    def test_prerelease_workspace_under_a_plain_range_is_a_registry_package(self):
+        self.write("libs/invented-workspace-zz/package.json", json.dumps({"name": "invented-workspace-zz", "version": "1.0.0-beta.1"}))
+        self.write("apps/web/package.json", json.dumps({"name": "web", "version": "1.0.0", "dependencies": {"invented-workspace-zz": "^1.0.0"}}))
+        self.write("package.json", json.dumps({"workspaces": ["libs/*", "apps/*"], "dependencies": {"react": "^18.0.0"}}))
+        self.assert_flags("npm:invented-workspace-zz")
+
+    def test_npm_folder_spec_needs_a_decision_but_no_lookup(self):
+        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "invented-up": "../libs/foo", "invented-abs": "/opt/libs/foo"}}))
+        self.assert_flags("npm:invented-up", "npm:invented-abs", "no decision id")
+        self.calls.clear()
+        self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertEqual(self.calls, [])
+
     def test_version_bump_is_not_new(self):
         self.write("requirements.txt", "requests==2.32\n")
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.3.0"}}))
