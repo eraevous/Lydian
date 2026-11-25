@@ -412,6 +412,14 @@ class TestTamperingTests(Base):
         self.write("tests/test_cls_skip.py", body % ("", skip))
         self.assert_flags("tests/test_cls_skip.py: 1 new skip or focus marker(s)")
 
+    def test_fstring_nested_spec_field_strings_forge_nothing(self):
+        self.write("tests/test_fspec.py", "def test_a():\n    rendered = f\"{1:{len('pytest.skip(')}}\"\n    assert rendered\n")
+        self.run_module()
+
+    def test_fstring_nested_spec_field_code_is_scanned(self):
+        self.write("tests/test_fspec2.py", "import pytest\n\ndef test_a():\n    rendered = f\"{1:{pytest.skip('x') or 3}}\"\n")
+        self.assert_flags("tests/test_fspec2.py: new test file with skips 0 -> 1")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 

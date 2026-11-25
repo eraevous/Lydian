@@ -701,6 +701,18 @@ def _scan_code(text, i, python, nested):
     out, n, depth, brackets, spec = [], len(text), 0, 0, False
     while i < n:
         c = text[i]
+        if nested and python and spec:
+            # The format spec ({value:#x}) is text, not code: dropped, so "#" there isn't a comment
+            # and its words can't forge a marker. A nested field in it ({x:{width}}) is an
+            # expression, scanned as code (Codex on #29).
+            if c == "}":
+                return "".join(out), i + 1
+            if c == "{":
+                code, i = _scan_code(text, i + 1, python, True)
+                out.append(" " + code + " ")
+                continue
+            i += 1
+            continue
         if nested:
             if c == "{":
                 depth += 1
@@ -708,11 +720,6 @@ def _scan_code(text, i, python, nested):
                 if depth == 0:
                     return "".join(out), i + 1
                 depth -= 1
-            if python and spec and c not in "{}":
-                # The format spec ({value:#x}) is text, not code: "#" there isn't a comment.
-                out.append(c)
-                i += 1
-                continue
             if python and depth == 0:
                 if c in "([":
                     brackets += 1
