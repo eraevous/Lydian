@@ -1168,23 +1168,26 @@ def repository_packages(root, rev, locations=None):
     # pip follows -r/--requirement includes, whatever the included file is called: read them too,
     # recursively, within the repository's tracked files (Codex security review on #29).
     files = set(tracked(root, rev))
-    queue = [p for p in files if re.fullmatch(r"requirements[^/]*\.txt", p.rsplit("/", 1)[-1])]
-    seen = set(queue)
+    # Each entry carries the top-level requirements file pip was pointed at: an --index-url there
+    # applies to everything it includes, so included packages are located at that file for the
+    # private-registry check (Codex on #29).
+    queue = [(p, p) for p in files if re.fullmatch(r"requirements[^/]*\.txt", p.rsplit("/", 1)[-1])]
+    seen = {p for p, _ in queue}
     already = {p for p in files if is_manifest(p)}
     while queue:
-        path = queue.pop()
+        path, top = queue.pop()
         text = file_at(root, rev, path) or ""
         if path not in already:
             for key, registry in manifest_packages("requirements.txt", text).items():
                 packages[key] = packages.get(key, False) or registry
                 if locations is not None and registry:
-                    locations.setdefault(key, set()).add(path)
+                    locations.setdefault(key, set()).add(top)
         folder = path.rsplit("/", 1)[0] if "/" in path else ""
         for inc in re.finditer(r"(?m)^\s*(?:-r|--requirement)(?:\s+|=)(\S+)", text):
             target = posixpath.normpath(posixpath.join(folder, inc.group(1)))
             if target in files and target not in seen:
                 seen.add(target)
-                queue.append(target)
+                queue.append((target, top))
     own = workspace_names(root, rev)
     return {key: registry for key, registry in packages.items() if key not in own}
 
