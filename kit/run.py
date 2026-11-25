@@ -1131,7 +1131,7 @@ def manifest_packages(path, text):
                     key = ("pypi", re.sub(r"[-_.]+", "-", pkg).lower())
                     found[key] = found.get(key, False) or not local
     else:   # requirements*.txt
-        for line in text.splitlines():
+        for line in join_continuations(text).splitlines():
             line = line.split(" #", 1)[0].strip()
             editable = re.match(r"(?:-e|--editable)(?:\s+|=)(\S+)", line)
             if editable:
@@ -1354,38 +1354,36 @@ def npm_registry_specs(text):
 def repository_packages(root, rev, locations=None):
     """{key: registry?} across the repository's manifests; `locations`, when given, collects the
     manifest paths that declare each registry key."""
-    packages = {}
-    for path in tracked(root, rev):
-        if is_manifest(path):
-            for key, registry in manifest_packages(path, file_at(root, rev, path) or "").items():
-                packages[key] = packages.get(key, False) or registry
-                if locations is not None and registry:
-                    locations.setdefault(key, set()).add(path)
-    # pip follows -r/--requirement includes, whatever the included file is called: read them too,
-    # recursively, within the repository's tracked files (Codex security review on #29).
     files = set(tracked(root, rev))
-    # Each entry carries the top-level requirements file pip was pointed at: an --index-url there
-    # applies to everything it includes, so included packages are located at that file for the
-    # private-registry check (Codex on #29).
-    queue = [(p, p) for p in files if re.fullmatch(r"requirements[^/]*\.txt", p.rsplit("/", 1)[-1])]
-    seen = {p for p, _ in queue}
+    # pip follows -r/--requirement includes, whatever the included file is called (Codex security
+    # review on #29). A file another requirements file includes is installed in that file's
+    # context, so its packages are located at the top-level file pip is pointed at: an --index-url
+    # there applies to everything it includes, even when the included file is itself named
+    # requirements-*.txt (Codex on #29). A file no top-level file reaches (a cycle) is its own.
+    reqs = sorted(p for p in files if re.fullmatch(r"requirements[^/]*\.txt", p.rsplit("/", 1)[-1]))
+    reach = {r: requirements_includes(root, rev, r, files) for r in reqs}
+    included = set().union(*reach.values()) if reach else set()
+    context = {}
+    for r in [r for r in reqs if r not in included]:
+        for f in [r] + reach[r]:
+            context.setdefault(f, set()).add(r)
+    for r in reqs:
+        if r not in context:
+            for f in [r] + reach[r]:
+                context.setdefault(f, set()).add(r)
+    packages = {}
+
+    def add(found, where):
+        for key, registry in found.items():
+            packages[key] = packages.get(key, False) or registry
+            if locations is not None and registry:
+                locations.setdefault(key, set()).update(where)
+
     already = {p for p in files if is_manifest(p)}
-    while queue:
-        path, top = queue.pop()
-        text = file_at(root, rev, path) or ""
-        if path not in already:
-            for key, registry in manifest_packages("requirements.txt", text).items():
-                packages[key] = packages.get(key, False) or registry
-                if locations is not None and registry:
-                    locations.setdefault(key, set()).add(top)
-        folder = path.rsplit("/", 1)[0] if "/" in path else ""
-        # pip accepts the short option attached (-rdeps.in) as well as -r deps.in and
-        # --requirement=deps.in (Codex on #29).
-        for inc in include_paths(text):
-            target = posixpath.normpath(posixpath.join(folder, inc))
-            if target in files and target not in seen:
-                seen.add(target)
-                queue.append((target, top))
+    for path in sorted(already):
+        add(manifest_packages(path, file_at(root, rev, path) or ""), context.get(path, {path}))
+    for path in sorted(included - already):
+        add(manifest_packages("requirements.txt", file_at(root, rev, path) or ""), context.get(path, {path}))
     # A sibling workspace is linked, not fetched, but only when its version satisfies every range
     # declared for it; otherwise npm goes to the registry (Codex on #29).
     own = workspace_names(root, rev)
@@ -1457,13 +1455,18 @@ def private_registries(root):
     return private
 
 
+def join_continuations(text):
+    """pip joins a line ending in a backslash with the next before parsing (Codex on #29)."""
+    return re.sub(r"\\\r?\n", "", text)
+
+
 def include_paths(text):
     """The files a requirements text includes with -r/--requirement. pip splits option lines like
     a shell, so a quoted path with spaces (-r "deps/dev requirements.in") is one argument (Codex on
     #29); the short option may be attached (-rdeps.in) and the long one may take "=" (--requirement=x)."""
     import shlex
     out = []
-    for line in text.splitlines():
+    for line in join_continuations(text).splitlines():
         m = re.match(r"\s*(?:-r|--requirement(?=[\s=]))\s*=?\s*(.*)", line)
         if not m or not m.group(1).strip():
             continue

@@ -578,6 +578,22 @@ class NewDependencyTests(Base):
         out = self.run_module(KAIROS_PR_BODY="DEC-1")
         self.assertTrue(any("private" in w for w in out["warnings"]))
 
+    def test_private_index_covers_an_included_requirements_named_file(self):
+        self.write("requirements.txt", "--index-url https://pypi.corp.example/simple\nrequests==2.31\n-r requirements-base.txt\n")
+        self.write("requirements-base.txt", "invented-corp-zz\n")
+        out = self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertTrue(any("private" in w for w in out["warnings"]))
+
+    def test_standalone_requirements_file_stays_public(self):
+        self.write("requirements.txt", "--index-url https://pypi.corp.example/simple\nrequests==2.31\n")
+        self.write("requirements-dev.txt", "invented-pkg-zz\n")
+        self.assert_flags("pypi:invented-pkg-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
+    def test_continued_include_line_is_followed(self):
+        self.write("requirements.txt", "requests==2.31\n-r \\\n./deps.in\n")
+        self.write("deps.in", "invented-pkg-zz\n")
+        self.assert_flags("pypi:invented-pkg-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
     def test_private_index_set_inside_an_included_file_counts(self):
         self.write("requirements.txt", "requests==2.31\n-rdeps.in\n")
         self.write("deps.in", "--index-url https://pypi.corp.example/simple\ninvented-corp-zz\n")
