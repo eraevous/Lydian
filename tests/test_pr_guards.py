@@ -519,6 +519,12 @@ class NewDependencyTests(Base):
         self.write("deps.in", "invented-pkg-zz\n")
         self.assert_flags("pypi:invented-pkg-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
 
+    def test_private_index_set_inside_an_included_file_counts(self):
+        self.write("requirements.txt", "requests==2.31\n-rdeps.in\n")
+        self.write("deps.in", "--index-url https://pypi.corp.example/simple\ninvented-corp-zz\n")
+        out = self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertTrue(any("private" in w for w in out["warnings"]))
+
     def test_npm_alias_target_is_looked_up(self):
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "helper": "npm:invented-pkg-zz@1",
                                                                  "scoped": "npm:@scope/pkg@2"}}))

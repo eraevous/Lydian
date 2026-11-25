@@ -1219,7 +1219,8 @@ def private_registries(root):
     or uv.toml index covers its own folder, a requirements index-url covers that file."""
     import tomllib
     private = set()
-    for path in tracked(root, "HEAD"):
+    files = set(tracked(root, "HEAD"))
+    for path in sorted(files):
         name = path.rsplit("/", 1)[-1]
         folder = path[: -len(name)]
         if name == ".npmrc":
@@ -1244,11 +1245,31 @@ def private_registries(root):
                     if isinstance(entry, dict) and isinstance(entry.get("url"), str) and is_private_url(entry["url"]):
                         private.add(("pypi", folder))
         elif is_manifest(path) and name != "package.json":
-            for match in re.finditer(r"(?m)^\s*(?:--(?:extra-)?index-url|-i|(?:extra-)?index-url)\s*[=\s]\s*(\S+)",
-                                     file_at(root, "HEAD", path) or ""):
-                if is_private_url(match.group(1)):
-                    private.add(("pypi", path))
+            # pip applies an index option from any file in a -r chain to the whole run, so a
+            # requirements file is private if it or anything it includes sets a private index
+            # (Codex on #29).
+            chain = [path] + (requirements_includes(root, "HEAD", path, files) if name.startswith("requirements") else [])
+            for member in chain:
+                for match in re.finditer(r"(?m)^\s*(?:--(?:extra-)?index-url|-i|(?:extra-)?index-url)\s*[=\s]\s*(\S+)",
+                                         file_at(root, "HEAD", member) or ""):
+                    if is_private_url(match.group(1)):
+                        private.add(("pypi", path))
     return private
+
+
+def requirements_includes(root, rev, top, files):
+    """Every tracked file reached from `top` through -r/--requirement includes, once each."""
+    out, queue, seen = [], [top], {top}
+    while queue:
+        path = queue.pop()
+        folder = path.rsplit("/", 1)[0] if "/" in path else ""
+        for inc in re.finditer(r"(?m)^\s*(?:-r\s*=?\s*|--requirement(?:\s+|\s*=\s*))(\S+)", file_at(root, rev, path) or ""):
+            target = posixpath.normpath(posixpath.join(folder, inc.group(1)))
+            if target in files and target not in seen:
+                seen.add(target)
+                out.append(target)
+                queue.append(target)
+    return out
 
 
 def privately_resolved(token, manifests, private):
