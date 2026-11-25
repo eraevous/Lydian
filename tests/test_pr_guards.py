@@ -350,6 +350,13 @@ class TestTamperingTests(Base):
         self.write("tests/test_cls.py", body % ("", skip))
         self.assert_flags("tests/test_cls.py: 1 new skip or focus marker(s)")
 
+    def test_moving_a_skip_between_same_named_tests_in_two_describes_is_seen(self):
+        body = 'describe("A", () => {\n  test%s("works", () => {});\n});\ndescribe("B", () => {\n  test%s("works", () => {});\n});\n'
+        self.write("src/app.test.ts", JS_TEST + body % (".skip", ""))
+        self.env["KAIROS_BASE_SHA"] = self.commit("skip in A")
+        self.write("src/app.test.ts", JS_TEST + body % ("", ".skip"))
+        self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 

@@ -801,6 +801,28 @@ def tampering_counts(path, text):
     return len(JS_ASSERTS.findall(text)), len(JS_SKIPS.findall(text))
 
 
+def _describe_spans(code):
+    """(start, end, name) for each describe()/suite()/context() block in scanned JS code: from the
+    call to the brace that closes its callback body, named by its title's string digest."""
+    spans = []
+    for d in re.finditer(r"(?<![\w.$])(?:describe|suite|context)\b[\s.\w]*\(", code):
+        title = re.match(r'\s*"([0-9a-f]{8})"', code[d.end():])
+        body = code.find("{", d.end())
+        if body < 0:
+            continue
+        depth, k = 0, body
+        while k < len(code):
+            if code[k] == "{":
+                depth += 1
+            elif code[k] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        spans.append((d.start(), k, title.group(1) if title else ""))
+    return spans
+
+
 def _enclosing_class(code, pos):
     """The class a definition at `pos` sits in: the nearest `class` line above it with less
     indentation, provided no line between them dedents to the class's level or further."""
@@ -865,6 +887,7 @@ def marker_lines(path, text):
     marks = Counter()
     # Match over the whole file, not line by line: the counting pattern spans line breaks
     # (test.\n  skip(...)), so the identity must too (Codex on #29).
+    describe_spans = [] if python else _describe_spans(code)
     for m in pattern.finditer(code):
         line_start = code.rfind("\n", 0, m.start()) + 1
         head = re.sub(r"\s+", " ", code[line_start:m.end()].strip())
@@ -894,6 +917,11 @@ def marker_lines(path, text):
             # Every string between the marker and the test body or the end of its call: a
             # modifier's arguments (skipIf(cond)) and the test's name, not the body (Codex on #29).
             name = " ".join(re.findall(r'[0-9a-f]{8}"', _registration_args(after)))
+            # Prefix the enclosing describe() path: describe("A") test("works") and describe("B")
+            # test("works") are different tests (Codex on #29).
+            suites = [n for start, end, n in describe_spans if start < m.start() < end]
+            if suites:
+                name = " > ".join(suites + [name])
         marks[f"{head} {name}"] += 1
     return marks
 
