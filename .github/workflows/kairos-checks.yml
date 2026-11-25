@@ -55,6 +55,13 @@ jobs:
           # Code-impact (report-only, DEC-256): the event's base revision; the kit skips it when absent.
           KAIROS_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           KAIROS_CODE_IMPACT_OUT: ${{ runner.temp }}/code-impact.md
+          # Pull-request guards (test-tampering, new-dependencies): read from the event payload, never
+          # from the repository. Empty outside a pull request, where both guards check nothing.
+          # A re-run reuses the payload, so a body edit takes effect on the next push.
+          KAIROS_EVENT_NAME: ${{ github.event_name }}
+          KAIROS_PR_BODY: ${{ github.event.pull_request.body }}
+          KAIROS_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          KAIROS_PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
         run: |
           [[ "$KAIROS_SUITE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "suite must name a file in Lydian's suites/" >&2; exit 2; }
           python3 -I -B kit/kit/run.py --repo repo \
