@@ -435,6 +435,48 @@ class HookGuard(unittest.TestCase):
         self.assertFalse(marker.exists())
         self.assertEqual({m["module"]: m["status"] for m in r["modules"]}["repository-tests"], "not-run")
 
+    # Codex security review on #27 (Zach chose option a on that thread, 2026-11-25): an allowed hook
+    # that runs a script from a git-ignored folder (crank-mem-eval's `.crank/hooks/*.ts`) is bound to
+    # nothing a PR can change only if that folder is never committed. The suite names such folders per
+    # repository; any tracked spelling of one, anywhere in the tree, fails.
+    def untracked(self, repo="eraevous/special"):
+        self.policy["paths_never_tracked"] = {repo: [".crank"]}
+
+    def test_committed_never_tracked_folder_fails(self):
+        self.untracked()
+        for parts in ((".crank", "hooks", "session-start.ts"), (".CRANK", "x"), (".crank. ", "x"),
+                      ("sub", ".crank", "hooks", "post-write.ts"), (".crank",)):
+            with self.subTest(parts=parts):
+                tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+                self.repo = Path(tmp.name)
+                target = self.repo.joinpath(*parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("console.log('replaced')\n")
+                r = self.run_guard("eraevous/Special")
+                self.assertEqual(r["gate"], "failed", r)
+                self.assertIn("must never be committed", r["modules"][0]["reason"])
+
+    def test_symlinked_never_tracked_folder_fails(self):
+        self.untracked()
+        (self.repo / ".crank").symlink_to("/nonexistent-crank")
+        self.assertEqual(self.run_guard("eraevous/special")["gate"], "failed")
+
+    def test_never_tracked_folder_absent_or_for_another_repo_passes(self):
+        # Decoys: nothing committed, a look-alike name, and the same folder in a repository the rule doesn't name.
+        self.untracked()
+        (self.repo / ".cranky").mkdir()
+        (self.repo / "crank").mkdir()
+        self.assertEqual(self.run_guard("eraevous/special")["gate"], "passed")
+        (self.repo / ".crank").mkdir()
+        self.assertEqual(self.run_guard("eraevous/other")["gate"], "passed")
+
+    def test_malformed_never_tracked_policy_fails_closed(self):
+        for bad in ([".crank"], {"eraevous/special": ".crank"}, {"eraevous/special": [3]},
+                    {"eraevous/special": ["a/b"]}, {"eraevous/special": [""]}):
+            with self.subTest(bad=bad):
+                self.policy["paths_never_tracked"] = bad
+                self.assertEqual(self.run_guard("eraevous/special")["gate"], "failed")
+
     def test_production_suites_carry_the_guard_for_every_kairos_repo(self):
         for name in ("kairos-v1", "kairos-records-v1"):
             policy = json.loads((ROOT / "suites" / f"{name}.json").read_text())["modules"]["hook-guard"]
@@ -519,6 +561,12 @@ class ProductionAllowlist(unittest.TestCase):
                 r = self.guard(decoy, name, "eraevous/MtG")
                 self.assertEqual(r["gate"], "failed")
                 self.assertIn("not on the central allowlist", r["modules"][0]["reason"])
+
+    def test_crank_mem_eval_never_tracks_crank_in_every_production_suite(self):
+        for name in PRODUCTION_SUITES:
+            with self.subTest(suite=name):
+                rule = production_policy(name).get("paths_never_tracked", {})
+                self.assertEqual(rule.get("eraevous/crank-mem-eval"), [".crank"])
 
     def record_rows(self, text):
         """{fingerprint: (source, fixture)} from the table in docs/hook-allowlist.md."""
