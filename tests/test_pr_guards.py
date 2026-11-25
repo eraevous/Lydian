@@ -236,6 +236,12 @@ class TestTamperingTests(Base):
         self.write("src/app.test.ts", JS_TEST + 'test("a", () => {});\ntest.skipIf(process.platform === "win32")("b", () => {});\n')
         self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
 
+    def test_moving_a_skip_across_multiline_registrations_is_seen(self):
+        self.write("src/app.test.ts", JS_TEST + 'test.skip(\n  "a",\n  () => {},\n);\ntest(\n  "b",\n  () => {},\n);\n')
+        self.env["KAIROS_BASE_SHA"] = self.commit("multiline skip on a")
+        self.write("src/app.test.ts", JS_TEST + 'test(\n  "a",\n  () => {},\n);\ntest.skip(\n  "b",\n  () => {},\n);\n')
+        self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
+
     def test_editing_a_skipped_tests_body_is_not_a_new_skip(self):
         self.write("src/app.test.ts", JS_TEST + 'test.skip("a", () => { expect(1).toBe(1); });\n')
         self.env["KAIROS_BASE_SHA"] = self.commit("skipped a")

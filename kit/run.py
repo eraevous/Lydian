@@ -817,7 +817,10 @@ def marker_lines(path, text):
             else:
                 # Every string between the marker and the test body: a modifier's arguments
                 # (skipIf(cond)) and the test's name, but not the body (Codex on #29).
-                tail = re.split(r"=>|\bfunction\b|\{", line[m.end():], maxsplit=1)[0]
+                # Read on past the line (a name often sits on the next one), up to the body
+                # (Codex on #29); 20 lines is plenty for any registration's arguments.
+                rest = "\n".join([line[m.end():]] + rows[n + 1:n + 21])
+                tail = re.split(r"=>|\bfunction\b|\{", rest, maxsplit=1)[0]
                 name = " ".join(re.findall(r'[0-9a-f]{8}"', tail))
             marks[f"{head} {name}"] += 1
     return marks
