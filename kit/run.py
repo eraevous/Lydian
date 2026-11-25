@@ -806,8 +806,12 @@ def _describe_spans(code):
     call to the brace that closes its callback body, named by its title's string digest."""
     spans = []
     for d in re.finditer(r"(?<![\w.$])(?:describe|suite|context)\b[\s.\w]*\(", code):
-        title = re.match(r'\s*"([0-9a-f]{8})"', code[d.end():])
-        body = code.find("{", d.end())
+        # Follow chained calls (describe.each([...])("A", ...)) past their data to the real
+        # callback, and take the title from the call's own arguments (Codex on #29).
+        call = d.end() - 1
+        args = _registration_args(code[call:call + 4000])
+        title = " ".join(re.findall(r'[0-9a-f]{8}"', args))
+        body = code.find("{", call + len(args))
         if body < 0:
             continue
         depth, k = 0, body
@@ -819,7 +823,7 @@ def _describe_spans(code):
                 if depth == 0:
                     break
             k += 1
-        spans.append((d.start(), k, title.group(1) if title else ""))
+        spans.append((d.start(), k, title))
     return spans
 
 
