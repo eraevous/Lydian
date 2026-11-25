@@ -841,7 +841,10 @@ def _scan_code(text, i, python, nested):
                 continue
             # Keep a digest of the literal, not its text: two tests' names stay distinct (so a
             # marker moved from one test to another is seen) and hex can't spell a marker.
-            out.append("%08x\"" % zlib.crc32(text[i:j + len(close)].encode("utf-8", "replace")))
+            # Hash the value, not its spelling: 'works', "works" and `works` are the same test name,
+            # so a quote-style change isn't a moved marker (Codex on #29).
+            value = re.sub(r"\\(['\"`])", r"\1", text[i + len(close):j])
+            out.append("%08x\"" % zlib.crc32(value.encode("utf-8", "replace")))
             i = j + len(close)
             continue
         out.append(c)
@@ -1180,7 +1183,7 @@ def manifest_packages(path, text):
     else:   # requirements*.txt
         for line in join_continuations(text).splitlines():
             line = line.split(" #", 1)[0].strip()
-            editable = re.match(r"(?:-e|--editable)(?:\s+|=)(\S+)", line)
+            editable = re.match(r"(?:-e\s*=?\s*|--editable(?:\s+|\s*=\s*))(\S+)", line)   # -epath attached, too (Codex on #29)
             if editable:
                 # A named editable install (-e git+...#egg=name) is a new non-registry package; an
                 # unnamed local one (-e .) names nothing (Copilot on #29).

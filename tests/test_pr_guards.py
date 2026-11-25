@@ -474,6 +474,12 @@ class TestTamperingTests(Base):
         self.write("tests/test_ios.py", 'import pytest\n\ndef test_a():\n    pytest.importorskip("unavailable_module")\n    assert True\n')
         self.assert_flags("tests/test_ios.py: new test file with skips 0 -> 1")
 
+    def test_changing_quote_style_on_a_skipped_test_is_not_a_new_skip(self):
+        self.write("src/app.test.ts", JS_TEST + 'describe("suite", () => {\n  test.skip("works", () => {});\n});\n')
+        self.env["KAIROS_BASE_SHA"] = self.commit("skip works")
+        self.write("src/app.test.ts", JS_TEST + "describe('suite', () => {\n  test.skip(`works`, () => {});\n});\n")
+        self.run_module()
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
@@ -578,6 +584,13 @@ class NewDependencyTests(Base):
     def test_local_wheel_needs_a_decision_but_no_lookup(self):
         self.write("requirements.txt", "requests==2.31\ninvented_local_zz-1.0-py3-none-any.whl\ndist/other-pkg-2.0.tar.gz\n")
         self.assert_flags("pypi:invented-local-zz", "pypi:other-pkg", "no decision id")
+        self.calls.clear()
+        self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertEqual(self.calls, [])
+
+    def test_attached_editable_requirement_needs_a_decision(self):
+        self.write("requirements.txt", "requests==2.31\n-egit+https://example.com/repo.git#egg=internal_pkg\n")
+        self.assert_flags("pypi:internal-pkg", "no decision id")
         self.calls.clear()
         self.run_module(KAIROS_PR_BODY="DEC-1")
         self.assertEqual(self.calls, [])
