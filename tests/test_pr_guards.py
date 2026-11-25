@@ -316,6 +316,12 @@ class TestTamperingTests(Base):
         self.write("src/app.test.ts", JS_TEST + 'const functionUnavailable = true;\ntest("a", () => {});\ntest.skipIf(functionUnavailable)("b", () => {});\n')
         self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
 
+    def test_moving_a_multiline_member_skip_is_seen(self):
+        self.write("src/app.test.ts", JS_TEST + 'test.\n  skip("a", () => {});\ntest("b", () => {});\n')
+        self.env["KAIROS_BASE_SHA"] = self.commit("split skip on a")
+        self.write("src/app.test.ts", JS_TEST + 'test("a", () => {});\ntest.\n  skip("b", () => {});\n')
+        self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 

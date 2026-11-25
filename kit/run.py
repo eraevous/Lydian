@@ -836,22 +836,22 @@ def marker_lines(path, text):
     from collections import Counter
     python = path.endswith(".py")
     pattern = PY_SKIPS if python else JS_SKIPS
-    rows = code_only(text, python).splitlines()
+    code = code_only(text, python)
     marks = Counter()
-    for n, line in enumerate(rows):
-        for m in pattern.finditer(line):
-            head = re.sub(r"\s+", " ", line[:m.end()].strip())
-            if python:
-                name = next((d.group(1) for later in rows[n:] for d in [re.search(r"\bdef\s+(\w+)", later)] if d), "")
-            else:
-                # Every string between the marker and the test body: a modifier's arguments
-                # (skipIf(cond)) and the test's name, but not the body (Codex on #29).
-                # Read on past the line (a name often sits on the next one), up to the body
-                # (Codex on #29); 20 lines is plenty for any registration's arguments.
-                rest = "\n".join([line[m.end():]] + rows[n + 1:n + 21])
-                tail = _registration_args(rest)
-                name = " ".join(re.findall(r'[0-9a-f]{8}"', tail))
-            marks[f"{head} {name}"] += 1
+    # Match over the whole file, not line by line: the counting pattern spans line breaks
+    # (test.\n  skip(...)), so the identity must too (Codex on #29).
+    for m in pattern.finditer(code):
+        line_start = code.rfind("\n", 0, m.start()) + 1
+        head = re.sub(r"\s+", " ", code[line_start:m.end()].strip())
+        after = code[m.end():m.end() + 4000]
+        if python:
+            d = re.search(r"\bdef\s+(\w+)", after)
+            name = d.group(1) if d else ""
+        else:
+            # Every string between the marker and the test body or the end of its call: a
+            # modifier's arguments (skipIf(cond)) and the test's name, not the body (Codex on #29).
+            name = " ".join(re.findall(r'[0-9a-f]{8}"', _registration_args(after)))
+        marks[f"{head} {name}"] += 1
     return marks
 
 
