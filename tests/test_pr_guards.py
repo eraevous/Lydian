@@ -379,6 +379,10 @@ class TestTamperingTests(Base):
         self.write("src/app.test.ts", JS_TEST + body % ("", ".skip"))
         self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
 
+    def test_division_after_a_postfix_increment_hides_nothing(self):
+        self.write("src/inc.test.js", 'let x = 1; x++ / 2; test.only("focused", () => {}); /x/.test("x");\n')
+        self.assert_flags("src/inc.test.js: new test file with skips 0 -> 1")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
@@ -505,6 +509,11 @@ class NewDependencyTests(Base):
         self.write("deps.in", "invented-corp-zz\n")
         out = self.run_module(KAIROS_PR_BODY="DEC-1")
         self.assertTrue(any("private" in w for w in out["warnings"]))
+
+    def test_attached_short_include_is_followed(self):
+        self.write("requirements.txt", "requests==2.31\n-rdeps.in\n")
+        self.write("deps.in", "invented-pkg-zz\n")
+        self.assert_flags("pypi:invented-pkg-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
 
     def test_npm_alias_target_is_looked_up(self):
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "helper": "npm:invented-pkg-zz@1",

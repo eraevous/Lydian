@@ -652,6 +652,8 @@ def _regex_can_start(code):
     stripped = code.rstrip()
     if not stripped:
         return True
+    if stripped.endswith(("++", "--")) and re.search(r"[\w$)\]]\s*(?:\+\+|--)$", stripped):
+        return False   # postfix x++ / 2 is division (Codex on #29)
     if stripped[-1] in "(,=:[!&|?{;+-*%<>~^":
         return True
     if stripped[-1] == "}":
@@ -1183,7 +1185,9 @@ def repository_packages(root, rev, locations=None):
                 if locations is not None and registry:
                     locations.setdefault(key, set()).add(top)
         folder = path.rsplit("/", 1)[0] if "/" in path else ""
-        for inc in re.finditer(r"(?m)^\s*(?:-r|--requirement)(?:\s+|=)(\S+)", text):
+        # pip accepts the short option attached (-rdeps.in) as well as -r deps.in and
+        # --requirement=deps.in (Codex on #29).
+        for inc in re.finditer(r"(?m)^\s*(?:-r\s*=?\s*|--requirement(?:\s+|\s*=\s*))(\S+)", text):
             target = posixpath.normpath(posixpath.join(folder, inc.group(1)))
             if target in files and target not in seen:
                 seen.add(target)
