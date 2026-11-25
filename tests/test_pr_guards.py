@@ -387,6 +387,16 @@ class TestTamperingTests(Base):
         self.write("tests/test_fmt.py", 'import pytest\n\ndef test_a():\n    value = 255\n    rendered = f"{value:#x}"; pytest.skip("unavailable")\n')
         self.assert_flags("tests/test_fmt.py: new test file with skips 0 -> 1")
 
+    def test_fstring_expression_comment_with_brace_is_a_comment(self):
+        # Python 3.12 allows a comment inside a multi-line f-string's {...}; a "}" later on that
+        # line doesn't make it format-spec text (Codex on #29).
+        self.write("tests/test_fcomment.py", 'def test_a():\n    value = 1\n    rendered = f"""{value # pytest.skip("not executed") }\n}"""\n    assert rendered\n')
+        self.run_module()
+
+    def test_fstring_slice_colon_is_not_a_format_spec(self):
+        self.write("tests/test_fslice.py", 'import pytest\n\ndef test_a():\n    items = [1, 2]\n    rendered = f"{items[0:1]!r:>10}"; pytest.skip("unavailable")\n')
+        self.assert_flags("tests/test_fslice.py: new test file with skips 0 -> 1")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 

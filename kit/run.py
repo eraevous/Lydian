@@ -698,7 +698,7 @@ def _scan_code(text, i, python, nested):
     """Scan from i, keeping code and dropping comments and string contents. Code inside a JS
     template's ${...} or a Python f-string's {...} runs, so it is scanned as code (Codex on #29).
     With nested set, stop at the "}" that closes the interpolation. Returns (code, next index)."""
-    out, n, depth = [], len(text), 0
+    out, n, depth, brackets, spec = [], len(text), 0, 0, False
     while i < n:
         c = text[i]
         if nested:
@@ -708,9 +708,21 @@ def _scan_code(text, i, python, nested):
                 if depth == 0:
                     return "".join(out), i + 1
                 depth -= 1
-        if python and c == "#" and not (nested and "\n" not in text[i:text.find("}", i) + 1 if "}" in text[i:] else n]):
-            # Inside an f-string's {...}, "#" on the same line as the closing brace is format-spec
-            # text ({value:#x}), not a comment (Codex on #29).
+            if python and spec and c not in "{}":
+                # The format spec ({value:#x}) is text, not code: "#" there isn't a comment.
+                out.append(c)
+                i += 1
+                continue
+            if python and depth == 0:
+                if c in "([":
+                    brackets += 1
+                elif c in ")]" and brackets:
+                    brackets -= 1
+                elif c == ":" and brackets == 0 and text[i + 1:i + 2] != "=":
+                    # The spec starts at the first ":" outside any brackets (not ":="); before it,
+                    # "#" starts a real comment even when a "}" follows on its line (Codex on #29).
+                    spec = True
+        if python and c == "#":
             i = text.find("\n", i)
             i = n if i < 0 else i
             continue
