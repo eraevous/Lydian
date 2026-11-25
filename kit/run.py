@@ -1070,8 +1070,9 @@ def test_tampering(root, config, policy):
 
 
 PEP508_NAME = re.compile(r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*(?:\[[^\]]*\])?\s*(@)?")
-# A folder spec (./x, ../x, /x, ~/x) is a package on the local filesystem (Codex on #29).
-NPM_LOCAL = re.compile(r"^(?:file|link|workspace|portal|git|git\+\w+|https?|github|npm):|^[\w.-]+/[\w.-]+(?:#.*)?$|^(?:\.{1,2}|~)?/|^\.{1,2}$")
+# A folder spec (./x, ../x, /x, ~/x) or a tarball file (x-1.0.0.tgz) is a package on the local
+# filesystem (Codex on #29).
+NPM_LOCAL = re.compile(r"^(?:file|link|workspace|portal|git|git\+\w+|https?|github|npm):|^[\w.-]+/[\w.-]+(?:#.*)?$|^(?:\.{1,2}|~)?/|^\.{1,2}$|\.(?:tgz|tar\.gz|tar)$")
 
 
 def pypi_name(spec):
@@ -1184,11 +1185,50 @@ def is_manifest(path):
     return name in ("package.json", "pyproject.toml") or bool(re.fullmatch(r"requirements[^/]*\.txt", name))
 
 
+def _workspace_glob(pattern):
+    """A workspace glob as a regex over folder paths, segment by segment as npm reads it: * and ?
+    stay inside one path segment, ** spans folders (Codex on #29)."""
+    out, i = [], 0
+    pattern = pattern.strip().rstrip("/")
+    while pattern.startswith("./"):
+        pattern = pattern[2:]
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:[^/]+/)*")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def _workspace_match(folder, spaces):
+    """Is `folder` a workspace? Matched by a pattern and not excluded by a later !pattern."""
+    hit = False
+    for g in spaces:
+        if not isinstance(g, str) or not g.strip():
+            continue
+        if g.startswith("!"):
+            if hit and _workspace_glob(g[1:]).match(folder):
+                hit = False
+        elif _workspace_glob(g).match(folder):
+            hit = True
+    return hit
+
+
 def workspace_names(root, rev):
     """npm package names defined by the root package.json's workspaces: a sibling is local, not a
     registry package. Only workspaces count, so a stray manifest elsewhere can't exempt a name
     (Codex on #29)."""
-    import fnmatch
     root_text = file_at(root, rev, "package.json")
     try:
         spaces = json.loads(root_text).get("workspaces") if root_text else None
@@ -1201,7 +1241,7 @@ def workspace_names(root, rev):
     names = {}
     for path in tracked(root, rev):
         folder = path.rsplit("/", 1)[0] if "/" in path else ""
-        if path.endswith("/package.json") and any(isinstance(g, str) and fnmatch.fnmatch(folder, g.rstrip("/")) for g in spaces):
+        if path.endswith("/package.json") and _workspace_match(folder, spaces):
             try:
                 data = json.loads(file_at(root, rev, path) or "")
                 own, version = data.get("name"), data.get("version")

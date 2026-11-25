@@ -647,6 +647,23 @@ class NewDependencyTests(Base):
         self.run_module(KAIROS_PR_BODY="DEC-1")
         self.assertEqual(self.calls, [])
 
+    def test_nested_folder_is_not_a_single_star_workspace(self):
+        self.write("libs/container/nested/package.json", json.dumps({"name": "invented-nested-zz", "version": "1.0.0"}))
+        self.write("package.json", json.dumps({"workspaces": ["libs/*"], "dependencies": {"react": "^18.0.0", "invented-nested-zz": "^1.0.0"}}))
+        self.assert_flags("npm:invented-nested-zz")
+
+    def test_excluded_workspace_is_not_local(self):
+        self.write("libs/invented-ex-zz/package.json", json.dumps({"name": "invented-ex-zz", "version": "1.0.0"}))
+        self.write("package.json", json.dumps({"workspaces": ["libs/*", "!libs/invented-ex-zz"], "dependencies": {"react": "^18.0.0", "invented-ex-zz": "^1.0.0"}}))
+        self.assert_flags("npm:invented-ex-zz")
+
+    def test_npm_tarball_file_needs_a_decision_but_no_lookup(self):
+        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "internal-foo-zz": "internal-foo-zz-1.0.0.tgz"}}))
+        self.assert_flags("npm:internal-foo-zz", "no decision id")
+        self.calls.clear()
+        self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertEqual(self.calls, [])
+
     def test_version_bump_is_not_new(self):
         self.write("requirements.txt", "requests==2.32\n")
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.3.0"}}))
