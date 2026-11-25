@@ -457,6 +457,12 @@ class TestTamperingTests(Base):
         self.write("src/cexpr.test.js", 'const v = class {} / 2; fit("focused", () => {}); /x/.test("x");\n')
         self.assert_flags("src/cexpr.test.js: new test file with skips 0 -> 1")
 
+    def test_editing_code_before_an_unchanged_skip_is_not_a_new_skip(self):
+        self.write("src/app.test.ts", JS_TEST + 'const n = 1; test.skip("later", () => {});\n')
+        self.env["KAIROS_BASE_SHA"] = self.commit("skip later")
+        self.write("src/app.test.ts", JS_TEST + 'const n = 2; test. skip("later", () => {});\n')
+        self.run_module()
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
@@ -737,6 +743,29 @@ class NewDependencyTests(Base):
         self.write("libs/invented-workspace-zz/package.json", json.dumps({"name": "invented-workspace-zz", "version": "1.0.0"}))
         self.write("package.json", json.dumps({"workspaces": ["libs/*"], "dependencies": {"react": "^18.0.0", "alias": "npm:invented-workspace-zz@^2.0.0"}}))
         self.assert_flags("npm:invented-workspace-zz")
+
+    def test_standalone_project_gets_no_workspace_exemption(self):
+        self.write("package.json", json.dumps({"workspaces": ["packages/*"], "dependencies": {"react": "^18.0.0"}}))
+        self.write("packages/lib/package.json", json.dumps({"name": "invented-lib-zz", "version": "1.0.0"}))
+        self.write("examples/standalone/package.json", json.dumps({"name": "ex", "dependencies": {"invented-lib-zz": "^1.0.0"}}))
+        self.assert_flags("npm:invented-lib-zz")
+
+    def test_x_range_on_a_workspace_is_local(self):
+        self.write("package.json", json.dumps({"workspaces": ["packages/*"], "dependencies": {"react": "^18.0.0"}}))
+        self.write("packages/lib/package.json", json.dumps({"name": "my-lib", "version": "1.4.0"}))
+        self.write("packages/app/package.json", json.dumps({"name": "app", "version": "1.0.0", "dependencies": {"my-lib": "x"}}))
+        self.assertEqual(self.run_module()["cases"], 0)
+        self.assertEqual(self.calls, [])
+
+    def test_root_npmrc_does_not_cover_a_standalone_project(self):
+        self.write(".npmrc", "registry=https://npm.corp.example/\n")
+        self.write("tools/package.json", json.dumps({"name": "tools", "dependencies": {"invented-npm-zz": "1"}}))
+        self.assert_flags("npm:invented-npm-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
+    def test_continued_index_url_is_private(self):
+        self.write("requirements.txt", "--index-url \\\nhttps://pypi.corp.example/simple\nrequests==2.31\ninvented-corp-zz\n")
+        out = self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertTrue(any("private" in w for w in out["warnings"]))
 
     def test_version_bump_is_not_new(self):
         self.write("requirements.txt", "requests==2.32\n")

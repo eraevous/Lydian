@@ -1010,7 +1010,16 @@ def marker_lines(path, text):
             suites = [n for start, end, n in describe_spans if start < m.start() < end]
             if suites:
                 name = " > ".join(suites + [name])
-        marks[f"{head} {name}"] += 1
+        # Key on the registration itself (receiver + marker, whitespace dropped), not the code
+        # before it on the line, so editing a neighbouring statement or re-spacing `test. skip`
+        # isn't read as a new marker (Copilot on #29).
+        matched = re.sub(r"\s+", "", m.group(0))
+        rec = re.search(r"([A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*(\.)?\s*$", code[max(0, m.start() - 300):m.start()])
+        if rec and matched.startswith(".") and rec.group(2) is None:
+            matched = re.sub(r"\s+", "", rec.group(1)) + matched
+        elif rec and not matched.startswith(".") and rec.group(2):
+            matched = re.sub(r"\s+", "", rec.group(1)) + "." + matched
+        marks[f"{matched} {name}"] += 1
     return marks
 
 
@@ -1321,6 +1330,9 @@ def _semver_satisfies(version, spec):
         if p is None:
             raise ValueError(text)
         filled = [x if x is not None else 0 for x in p]
+        if all(x is None for x in p):
+            # x, X, * (with any operator but < or >) is unconstrained (Copilot on #29).
+            return [("<", (0, 0, 0))] if op in ("<", ">") else []
         n = next((i for i, x in enumerate(p) if x is None), 3)   # count of given parts
         lo = tuple(filled)
         def bump(i):
@@ -1425,11 +1437,15 @@ def repository_packages(root, rev, locations=None):
     # A sibling workspace is linked, not fetched, but only when its version satisfies every range
     # declared for it; otherwise npm goes to the registry (Codex on #29).
     own = workspace_names(root, rev)
+    spaces = root_workspaces(root, rev)
     ranges = {}
     for path in tracked(root, rev):
         if path.rsplit("/", 1)[-1] == "package.json" and own:
+            # Only the root project and its declared workspaces link siblings; a standalone
+            # project elsewhere fetches the name from the registry (Copilot on #29).
+            member = path == "package.json" or _workspace_match(path.rsplit("/", 1)[0], spaces)
             for pkg, specs in npm_registry_specs(file_at(root, rev, path) or "").items():
-                ranges.setdefault(("npm", pkg), []).extend(specs)
+                ranges.setdefault(("npm", pkg), []).extend(specs if member else [ALIAS_RANGE] * len(specs))
     return {key: registry for key, registry in packages.items()
             if key not in own or any(_semver_satisfies(own[key], r) is not True for r in ranges.get(key, []))}
 
@@ -1492,7 +1508,7 @@ def private_registries(root):
             chain = [path] + (requirements_includes(root, "HEAD", path, files) if name.startswith("requirements") else [])
             for member in chain:
                 for match in re.finditer(r"(?m)^\s*(?:--(?:extra-)?index-url|-i|(?:extra-)?index-url)\s*[=\s]\s*(\S+)",
-                                         file_at(root, "HEAD", member) or ""):
+                                         join_continuations(file_at(root, "HEAD", member) or "")):
                     if is_private_url(match.group(1)):
                         private.add(("pypi", path))
     return private
@@ -1537,11 +1553,14 @@ def requirements_includes(root, rev, top, files):
     return out
 
 
-def privately_resolved(token, manifests, private):
-    """True when every manifest declaring the package is governed by a private config for token."""
+def privately_resolved(token, manifests, private, spaces=()):
+    """True when every manifest declaring the package is governed by a private config for token.
+    The root .npmrc governs the root project and its declared workspaces, not a standalone
+    project elsewhere in the tree (Copilot on #29)."""
     def covered(manifest):
         folder = manifest[: len(manifest) - len(manifest.rsplit("/", 1)[-1])]
-        return any(t == token and (scope == manifest or scope == folder or (t.startswith("npm") and scope == ""))
+        under_root = manifest == "package.json" or (folder and _workspace_match(folder.rstrip("/"), spaces))
+        return any(t == token and (scope == manifest or scope == folder or (t.startswith("npm") and scope == "" and under_root))
                    for t, scope in private)
     return bool(manifests) and all(covered(m) for m in manifests)
 
@@ -1588,6 +1607,7 @@ def new_dependencies(root, config, policy):
     # package arrives (Codex security review on #29).
     added = sorted(key for key in after if key not in before or (after[key] and not before[key]))
     private = private_registries(root) if added else set()
+    spaces = root_workspaces(root, "HEAD")
     findings, warnings = [], []
     for ecosystem, name in added:
         if not after[(ecosystem, name)]:
@@ -1595,8 +1615,8 @@ def new_dependencies(root, config, policy):
         status = registry_status(registry_url(ecosystem, name))
         scope = f"npm:{name.split('/')[0]}" if name.startswith("@") else None
         manifests = where.get((ecosystem, name), set())
-        if status == 404 and (privately_resolved(ecosystem, manifests, private)
-                              or (scope and privately_resolved(scope, manifests, private))):
+        if status == 404 and (privately_resolved(ecosystem, manifests, private, spaces)
+                              or (scope and privately_resolved(scope, manifests, private, spaces))):
             warnings.append(f"{ecosystem}:{name}: not on the public registry; this repository uses a private one, so unconfirmed")
         elif status == 404:
             findings.append(f"{ecosystem}:{name}: package does not exist (possibly invented)")
