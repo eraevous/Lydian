@@ -613,6 +613,11 @@ class NewDependencyTests(Base):
         out = self.run_module(KAIROS_PR_BODY="DEC-1")
         self.assertTrue(any("private" in w for w in out["warnings"]))
 
+    def test_public_scope_override_keeps_registry_checks(self):
+        self.write(".npmrc", "registry=https://npm.corp.example/\n@public:registry=https://registry.npmjs.org/\n")
+        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "@public/invented-package-zz": "1"}}))
+        self.assert_flags("npm:@public/invented-package-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
     def test_requirements_index_url_covers_only_its_own_file(self):
         self.write("other/requirements-dev.txt", "--index-url https://pypi.corp.example/simple\nrich\n")
         self.write("requirements.txt", "requests==2.31\ninvented-pkg-zz\n")

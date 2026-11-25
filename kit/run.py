@@ -1495,8 +1495,11 @@ def private_registries(root):
                 key = key.strip()
                 if key == "registry" and is_private_url(value):
                     private.add(("npm", folder))
-                elif key.startswith("@") and key.endswith(":registry") and is_private_url(value):
-                    private.add(("npm:" + key[: -len(":registry")], folder))
+                elif key.startswith("@") and key.endswith(":registry"):
+                    # A scope pointed back at the public registry overrides a private default for
+                    # that scope (npm picks the scoped registry first) (Codex on #29).
+                    tag = "npm:" if is_private_url(value) else "npm-public:"
+                    private.add((tag + key[: -len(":registry")], folder))
         elif name in ("pyproject.toml", "uv.toml"):
             try:
                 data = tomllib.loads(file_at(root, "HEAD", path) or "")
@@ -1644,7 +1647,8 @@ def new_dependencies(root, config, policy):
         status = registry_status(registry_url(ecosystem, name))
         scope = f"npm:{name.split('/')[0]}" if name.startswith("@") else None
         manifests = where.get((ecosystem, name), set())
-        if status == 404 and (privately_resolved(ecosystem, manifests, private, spaces)
+        public_scope = scope and privately_resolved("npm-public:" + scope[len("npm:"):], manifests, private, spaces)
+        if status == 404 and ((not public_scope and privately_resolved(ecosystem, manifests, private, spaces))
                               or (scope and privately_resolved(scope, manifests, private, spaces))
                               or (ecosystem == "pypi" and privately_resolved(f"pypi:pkg:{name}", manifests, private, spaces))):
             warnings.append(f"{ecosystem}:{name}: not on the public registry; this repository uses a private one, so unconfirmed")
