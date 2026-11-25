@@ -804,7 +804,15 @@ def _scan_code(text, i, python, nested):
                     # (Codex on #29).
                     broken = True
                     break
-                if text[j] == "\\":
+                if text[j] == "\\" and interpolated and python and text[j + 1:j + 2] == "{":
+                    # A backslash doesn't escape a replacement field in an f-string: the brace
+                    # still opens one (rf"\{call()}" runs call()) (Codex on #29).
+                    j += 1
+                elif text[j] == "\\" and interpolated and python and "r" not in prefix and text.startswith("N{", j + 1):
+                    # \N{NAME} in a non-raw f-string is a named character, not a field.
+                    end = text.find("}", j)
+                    j = n if end < 0 else end + 1
+                elif text[j] == "\\":
                     j += 2
                 elif interpolated and not python and text.startswith("${", j):
                     code, j = _scan_code(text, j + 2, python, True)
@@ -957,12 +965,26 @@ def marker_lines(path, text):
             else:
                 # A runtime skip (pytest.skip(), self.skipTest(), pytestmark = ...) belongs to the
                 # test it sits in: the nearest def above with less indentation (Codex on #29).
+                # Walk up to the nearest enclosing def or class (a class-level pytestmark belongs to
+                # its class, and a top-level def above a class doesn't enclose it) (Codex on #29).
                 indent = len(code[line_start:m.start()]) - len(code[line_start:m.start()].lstrip())
-                name = ""
-                def_at = None
-                for d in re.finditer(r"(?m)^([ \t]*)(?:async\s+)?def\s+(\w+)", code[:line_start]):
-                    if len(d.group(1)) < indent:
-                        name, def_at = d.group(2), d.start()
+                name, def_at = "", None
+                pos = line_start
+                while pos > 0 and indent > 0:
+                    prev = code.rfind("\n", 0, pos - 1) + 1
+                    row = code[prev:pos - 1] if pos - 1 >= prev else ""
+                    pos = prev
+                    if not row.strip():
+                        continue
+                    row_indent = len(row) - len(row.lstrip(" \t"))
+                    if row_indent >= indent:
+                        continue
+                    d = re.match(r"[ \t]*(?:async\s+)?(def|class)\s+(\w+)", row)
+                    if d:
+                        name = d.group(2) if d.group(1) == "def" else f"class {d.group(2)}"
+                        def_at = prev
+                        break
+                    indent = row_indent   # an if/with/for block: keep looking above it
             if def_at is not None:
                 # Qualify with the enclosing class: A.test_x and B.test_x are different tests
                 # (Codex on #29).

@@ -428,6 +428,23 @@ class TestTamperingTests(Base):
         self.write("src/fdecl.test.js", 'function f() {}\n/"/.test("x"); test.only("focused", () => {}); const q = "\\"";\n')
         self.assert_flags("src/fdecl.test.js: new test file with skips 0 -> 1")
 
+    def test_backslash_before_an_fstring_field_hides_nothing(self):
+        self.write("tests/test_rf.py", 'import pytest\n\ndef test_a():\n    rendered = rf"\\{pytest.skip(\'unavailable\')}"\n')
+        self.assert_flags("tests/test_rf.py: new test file with skips 0 -> 1")
+
+    def test_named_character_in_an_fstring_is_not_a_field(self):
+        self.write("tests/test_nchar.py", 'def test_a():\n    rendered = f"\\N{BULLET} {1}"\n    assert rendered\n')
+        self.run_module()
+
+    def test_moving_a_class_pytestmark_to_another_class_is_seen(self):
+        body = ("import pytest\n\ndef helper():\n    return 1\n\nclass TestA:\n%s    def test_feature(self):\n        assert helper()\n\n"
+                "class TestB:\n%s    def test_feature(self):\n        assert helper()\n")
+        mark = "    pytestmark = pytest.mark.skip\n"
+        self.write("tests/test_pm.py", body % (mark, ""))
+        self.env["KAIROS_BASE_SHA"] = self.commit("skip A")
+        self.write("tests/test_pm.py", body % ("", mark))
+        self.assert_flags("tests/test_pm.py: 1 new skip or focus marker(s)")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
