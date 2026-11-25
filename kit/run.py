@@ -845,8 +845,18 @@ def marker_lines(path, text):
         head = re.sub(r"\s+", " ", code[line_start:m.end()].strip())
         after = code[m.end():m.end() + 4000]
         if python:
-            d = re.search(r"\bdef\s+(\w+)", after)
-            name = d.group(1) if d else ""
+            if head.startswith("@"):
+                # A decorator belongs to the definition below it.
+                d = re.search(r"\bdef\s+(\w+)", after)
+                name = d.group(1) if d else ""
+            else:
+                # A runtime skip (pytest.skip(), self.skipTest(), pytestmark = ...) belongs to the
+                # test it sits in: the nearest def above with less indentation (Codex on #29).
+                indent = len(code[line_start:m.start()]) - len(code[line_start:m.start()].lstrip())
+                name = ""
+                for d in re.finditer(r"(?m)^([ \t]*)(?:async\s+)?def\s+(\w+)", code[:line_start]):
+                    if len(d.group(1)) < indent:
+                        name = d.group(2)
         else:
             # Every string between the marker and the test body or the end of its call: a
             # modifier's arguments (skipIf(cond)) and the test's name, not the body (Codex on #29).

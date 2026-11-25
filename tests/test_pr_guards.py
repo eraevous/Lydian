@@ -322,6 +322,19 @@ class TestTamperingTests(Base):
         self.write("src/app.test.ts", JS_TEST + 'test("a", () => {});\ntest.\n  skip("b", () => {});\n')
         self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
 
+    def test_renaming_a_test_after_a_runtime_skip_is_not_a_new_skip(self):
+        body = "import pytest\n\ndef test_a():\n    pytest.skip(\"unavailable\")\n    assert 1\n\ndef test_%s():\n    assert 2\n"
+        self.write("tests/test_rt.py", body % "b")
+        self.env["KAIROS_BASE_SHA"] = self.commit("runtime skip in a")
+        self.write("tests/test_rt.py", body % "renamed")
+        self.run_module()
+
+    def test_moving_a_runtime_skip_to_another_test_is_seen(self):
+        self.write("tests/test_rt.py", "import pytest\n\ndef test_a():\n    pytest.skip(\"x\")\n\ndef test_b():\n    assert 2\n")
+        self.env["KAIROS_BASE_SHA"] = self.commit("runtime skip in a")
+        self.write("tests/test_rt.py", "import pytest\n\ndef test_a():\n    assert 2\n\ndef test_b():\n    pytest.skip(\"x\")\n")
+        self.assert_flags("tests/test_rt.py: 1 new skip or focus marker(s)")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
