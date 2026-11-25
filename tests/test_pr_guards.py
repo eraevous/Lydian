@@ -310,6 +310,12 @@ class TestTamperingTests(Base):
         self.write("tests/test_dot.py", "import pytest\n@pytest.mark. skip\ndef test_a():\n    assert 1\n")
         self.assert_flags("src/dot.test.js: new test file with skips 0 -> 2", "tests/test_dot.py: new test file with skips 0 -> 1")
 
+    def test_identifier_starting_with_function_does_not_cut_the_identity(self):
+        self.write("src/app.test.ts", JS_TEST + 'const functionUnavailable = true;\ntest.skipIf(functionUnavailable)("a", () => {});\ntest("b", () => {});\n')
+        self.env["KAIROS_BASE_SHA"] = self.commit("conditional skip on a")
+        self.write("src/app.test.ts", JS_TEST + 'const functionUnavailable = true;\ntest("a", () => {});\ntest.skipIf(functionUnavailable)("b", () => {});\n')
+        self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 

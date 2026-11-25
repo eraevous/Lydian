@@ -808,7 +808,11 @@ def _registration_args(rest):
     #29). Chained calls (skipIf(cond)("name", ...), .each([...])(...)) are followed through."""
     depth, opened = 0, False
     for k, ch in enumerate(rest):
-        if rest.startswith("=>", k) or ch == "{" or rest.startswith("function", k):
+        # `function` only as a whole keyword: an identifier like functionUnavailable is part of the
+        # arguments (Codex on #29).
+        keyword = (rest.startswith("function", k) and not (k and (rest[k - 1].isalnum() or rest[k - 1] in "_$"))
+                   and not re.match(r"[\w$]", rest[k + 8:k + 9]))
+        if rest.startswith("=>", k) or ch == "{" or keyword:
             return rest[:k]
         if ch in "([":
             depth += 1
