@@ -799,6 +799,29 @@ def tampering_counts(path, text):
     return len(JS_ASSERTS.findall(text)), len(JS_SKIPS.findall(text))
 
 
+def _registration_args(rest):
+    """The registration's own arguments: from after the marker up to its callback body (=>,
+    function, {) or the end of its call, whichever comes first, so the strings of a following
+    statement aren't read into a callback-less registration such as test.todo("x"); (Codex on
+    #29). Chained calls (skipIf(cond)("name", ...), .each([...])(...)) are followed through."""
+    depth, opened = 0, False
+    for k, ch in enumerate(rest):
+        if rest.startswith("=>", k) or ch == "{" or rest.startswith("function", k):
+            return rest[:k]
+        if ch in "([":
+            depth += 1
+            opened = True
+        elif ch in ")]":
+            depth -= 1
+            if depth <= 0 and opened:
+                nxt = rest[k + 1:].lstrip()
+                if not nxt.startswith(("(", ".")):
+                    return rest[:k + 1]
+        elif ch == ";" and depth <= 0:
+            return rest[:k]
+    return rest
+
+
 def marker_lines(path, text):
     """Each skip or focus marker's registration, counted: the code up to the marker plus the test's
     name (a string digest in JS, the next def in Python), not the test's body, so editing a skipped
@@ -820,7 +843,7 @@ def marker_lines(path, text):
                 # Read on past the line (a name often sits on the next one), up to the body
                 # (Codex on #29); 20 lines is plenty for any registration's arguments.
                 rest = "\n".join([line[m.end():]] + rows[n + 1:n + 21])
-                tail = re.split(r"=>|\bfunction\b|\{", rest, maxsplit=1)[0]
+                tail = _registration_args(rest)
                 name = " ".join(re.findall(r'[0-9a-f]{8}"', tail))
             marks[f"{head} {name}"] += 1
     return marks

@@ -242,6 +242,12 @@ class TestTamperingTests(Base):
         self.write("src/app.test.ts", JS_TEST + 'test(\n  "a",\n  () => {},\n);\ntest.skip(\n  "b",\n  () => {},\n);\n')
         self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
 
+    def test_renaming_a_test_after_a_todo_is_not_a_new_skip(self):
+        self.write("src/app.test.ts", JS_TEST + 'test.todo("future");\ntest("original", () => {});\n')
+        self.env["KAIROS_BASE_SHA"] = self.commit("todo then test")
+        self.write("src/app.test.ts", JS_TEST + 'test.todo("future");\ntest("renamed", () => {});\n')
+        self.run_module()
+
     def test_editing_a_skipped_tests_body_is_not_a_new_skip(self):
         self.write("src/app.test.ts", JS_TEST + 'test.skip("a", () => { expect(1).toBe(1); });\n')
         self.env["KAIROS_BASE_SHA"] = self.commit("skipped a")
