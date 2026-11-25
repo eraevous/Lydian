@@ -397,6 +397,21 @@ class TestTamperingTests(Base):
         self.write("tests/test_fslice.py", 'import pytest\n\ndef test_a():\n    items = [1, 2]\n    rendered = f"{items[0:1]!r:>10}"; pytest.skip("unavailable")\n')
         self.assert_flags("tests/test_fslice.py: new test file with skips 0 -> 1")
 
+    def test_renaming_a_method_under_a_class_skip_is_not_a_new_skip(self):
+        body = "import unittest\n\n@unittest.skip(\"unavailable\")\nclass TestFeature(unittest.TestCase):\n    def %s(self):\n        self.assertTrue(1)\n"
+        self.write("tests/test_cls_skip.py", body % "test_a")
+        self.env["KAIROS_BASE_SHA"] = self.commit("class skip")
+        self.write("tests/test_cls_skip.py", body % "test_b")
+        self.run_module()
+
+    def test_moving_a_class_skip_to_another_class_is_seen(self):
+        body = "import unittest\n\n%sclass A(unittest.TestCase):\n    def test_a(self):\n        self.assertTrue(1)\n\n%sclass B(unittest.TestCase):\n    def test_a(self):\n        self.assertTrue(1)\n"
+        skip = "@unittest.skip(\"unavailable\")\n"
+        self.write("tests/test_cls_skip.py", body % (skip, ""))
+        self.env["KAIROS_BASE_SHA"] = self.commit("skip A")
+        self.write("tests/test_cls_skip.py", body % ("", skip))
+        self.assert_flags("tests/test_cls_skip.py: 1 new skip or focus marker(s)")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
@@ -494,6 +509,13 @@ class NewDependencyTests(Base):
     def test_named_editable_requirement_needs_a_decision(self):
         self.write("requirements.txt", "requests==2.31\n-e git+https://example.com/new-lib.git#egg=new-lib\n--editable=.\n")
         self.assert_flags("pypi:new-lib", "no decision id")
+        self.calls.clear()
+        self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertEqual(self.calls, [])
+
+    def test_local_wheel_needs_a_decision_but_no_lookup(self):
+        self.write("requirements.txt", "requests==2.31\ninvented_local_zz-1.0-py3-none-any.whl\ndist/other-pkg-2.0.tar.gz\n")
+        self.assert_flags("pypi:invented-local-zz", "pypi:other-pkg", "no decision id")
         self.calls.clear()
         self.run_module(KAIROS_PR_BODY="DEC-1")
         self.assertEqual(self.calls, [])

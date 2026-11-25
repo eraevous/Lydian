@@ -918,9 +918,10 @@ def marker_lines(path, text):
         after = code[m.end():m.end() + 4000]
         if python:
             if head.startswith("@"):
-                # A decorator belongs to the definition below it.
-                d = re.search(r"\bdef\s+(\w+)", after)
-                name = d.group(1) if d else ""
+                # A decorator belongs to the definition below it, a class or a function: a
+                # class-level skip is the class's, not its first method's (Codex on #29).
+                d = re.search(r"\b(class|def)\s+(\w+)", after)
+                name = (d.group(2) if d.group(1) == "def" else f"class {d.group(2)}") if d else ""
                 def_at = m.end() + d.start() if d else None
             else:
                 # A runtime skip (pytest.skip(), self.skipTest(), pytestmark = ...) belongs to the
@@ -1106,6 +1107,13 @@ def manifest_packages(path, text):
                 egg = re.search(r"#egg=([A-Za-z0-9][A-Za-z0-9._-]*)", editable.group(1))
                 if egg:
                     specs.append(f"{egg.group(1)} @ editable")
+                continue
+            archive = re.match(r"(?:\S*/)?([A-Za-z0-9][A-Za-z0-9._-]*?)-[0-9][^/\s;]*?\.(?:whl|tar\.gz|tar\.bz2|tgz|zip)\s*(?:;.*)?$", line)
+            if archive and "://" not in line:
+                # A local wheel or sdist (pkg-1.0-py3-none-any.whl, dist/pkg-1.0.tar.gz) is a new
+                # non-registry package named by its file: it needs a decision id, but its file name
+                # isn't looked up on PyPI (Codex on #29).
+                specs.append(f"{archive.group(1)} @ local")
                 continue
             if line and not line.startswith(("#", "-", ".", "/")) and (
                     "://" not in line or re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*\s*(?:\[[^\]]*\])?\s*@", line)):
