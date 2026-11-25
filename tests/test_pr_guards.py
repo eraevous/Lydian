@@ -383,6 +383,10 @@ class TestTamperingTests(Base):
         self.write("src/inc.test.js", 'let x = 1; x++ / 2; test.only("focused", () => {}); /x/.test("x");\n')
         self.assert_flags("src/inc.test.js: new test file with skips 0 -> 1")
 
+    def test_fstring_format_spec_hash_hides_nothing(self):
+        self.write("tests/test_fmt.py", 'import pytest\n\ndef test_a():\n    value = 255\n    rendered = f"{value:#x}"; pytest.skip("unavailable")\n')
+        self.assert_flags("tests/test_fmt.py: new test file with skips 0 -> 1")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 

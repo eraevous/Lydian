@@ -708,7 +708,9 @@ def _scan_code(text, i, python, nested):
                 if depth == 0:
                     return "".join(out), i + 1
                 depth -= 1
-        if python and c == "#":
+        if python and c == "#" and not (nested and "\n" not in text[i:text.find("}", i) + 1 if "}" in text[i:] else n]):
+            # Inside an f-string's {...}, "#" on the same line as the closing brace is format-spec
+            # text ({value:#x}), not a comment (Codex on #29).
             i = text.find("\n", i)
             i = n if i < 0 else i
             continue
