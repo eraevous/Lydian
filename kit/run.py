@@ -1257,19 +1257,25 @@ def _workspace_match(folder, spaces):
     return hit
 
 
-def workspace_names(root, rev):
-    """npm package names defined by the root package.json's workspaces: a sibling is local, not a
-    registry package. Only workspaces count, so a stray manifest elsewhere can't exempt a name
-    (Codex on #29)."""
+def root_workspaces(root, rev):
+    """The workspace globs the root package.json declares ([] when none)."""
     root_text = file_at(root, rev, "package.json")
     try:
         spaces = json.loads(root_text).get("workspaces") if root_text else None
     except (ValueError, AttributeError):
-        return set()
+        return []
     if isinstance(spaces, dict):
         spaces = spaces.get("packages")
-    if not isinstance(spaces, list):
-        return set()
+    return spaces if isinstance(spaces, list) else []
+
+
+def workspace_names(root, rev):
+    """npm package names defined by the root package.json's workspaces: a sibling is local, not a
+    registry package. Only workspaces count, so a stray manifest elsewhere can't exempt a name
+    (Codex on #29)."""
+    spaces = root_workspaces(root, rev)
+    if not spaces:
+        return {}
     names = {}
     for path in tracked(root, rev):
         folder = path.rsplit("/", 1)[0] if "/" in path else ""
@@ -1450,10 +1456,15 @@ def private_registries(root):
     import tomllib
     private = set()
     files = set(tracked(root, "HEAD"))
+    spaces = root_workspaces(root, "HEAD")
     for path in sorted(files):
         name = path.rsplit("/", 1)[-1]
         folder = path[: -len(name)]
         if name == ".npmrc":
+            # npm installs workspaces from the root and ignores a .npmrc inside a workspace
+            # folder, so only the root's config applies there (Codex on #29).
+            if folder and _workspace_match(folder.rstrip("/"), spaces):
+                continue
             for line in (file_at(root, "HEAD", path) or "").splitlines():
                 key, _, value = line.partition("=")
                 key = key.strip()

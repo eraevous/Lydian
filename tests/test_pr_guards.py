@@ -570,6 +570,19 @@ class NewDependencyTests(Base):
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "invented-npm-zz": "1"}}))
         self.assert_flags("npm:invented-npm-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
 
+    def test_npmrc_inside_a_workspace_is_ignored(self):
+        self.write("package.json", json.dumps({"workspaces": ["packages/*"], "dependencies": {"react": "^18.0.0"}}))
+        self.write("packages/a/package.json", json.dumps({"name": "a", "version": "1.0.0", "dependencies": {"invented-npm-zz": "1"}}))
+        self.write("packages/a/.npmrc", "registry=https://npm.corp.example/\n")
+        self.assert_flags("npm:invented-npm-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
+    def test_root_npmrc_covers_a_workspace(self):
+        self.write("package.json", json.dumps({"workspaces": ["packages/*"], "dependencies": {"react": "^18.0.0"}}))
+        self.write("packages/a/package.json", json.dumps({"name": "a", "version": "1.0.0", "dependencies": {"invented-npm-zz": "1"}}))
+        self.write(".npmrc", "registry=https://npm.corp.example/\n")
+        out = self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertTrue(any("private" in w for w in out["warnings"]))
+
     def test_requirements_index_url_covers_only_its_own_file(self):
         self.write("other/requirements-dev.txt", "--index-url https://pypi.corp.example/simple\nrich\n")
         self.write("requirements.txt", "requests==2.31\ninvented-pkg-zz\n")
