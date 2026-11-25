@@ -420,6 +420,14 @@ class TestTamperingTests(Base):
         self.write("tests/test_fspec2.py", "import pytest\n\ndef test_a():\n    rendered = f\"{1:{pytest.skip('x') or 3}}\"\n")
         self.assert_flags("tests/test_fspec2.py: new test file with skips 0 -> 1")
 
+    def test_division_after_a_function_expression_hides_nothing(self):
+        self.write("src/fexpr.test.js", 'const v = function() {} / 2; test.only("focused", () => {}); /x/.test("x");\n')
+        self.assert_flags("src/fexpr.test.js: new test file with skips 0 -> 1")
+
+    def test_regex_after_a_function_declaration_hides_nothing(self):
+        self.write("src/fdecl.test.js", 'function f() {}\n/"/.test("x"); test.only("focused", () => {}); const q = "\\"";\n')
+        self.assert_flags("src/fdecl.test.js: new test file with skips 0 -> 1")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
@@ -610,6 +618,19 @@ class NewDependencyTests(Base):
                    '[project.optional-dependencies]\nall = ["x[a]"]\n')
         self.write("libs/my-lib/package.json", json.dumps({"name": "my-lib"}))
         self.write("package.json", json.dumps({"workspaces": ["libs/*"], "dependencies": {"react": "^18.0.0", "my-lib": "*"}}))
+        self.assertEqual(self.run_module()["cases"], 0)
+        self.assertEqual(self.calls, [])
+
+    def test_workspace_name_with_an_unsatisfied_range_is_a_registry_package(self):
+        self.write("libs/invented-workspace-zz/package.json", json.dumps({"name": "invented-workspace-zz", "version": "1.0.0"}))
+        self.write("apps/web/package.json", json.dumps({"name": "web", "version": "1.0.0", "dependencies": {"invented-workspace-zz": "^2.0.0"}}))
+        self.write("package.json", json.dumps({"workspaces": ["libs/*", "apps/*"], "dependencies": {"react": "^18.0.0"}}))
+        self.assert_flags("npm:invented-workspace-zz")
+
+    def test_workspace_name_with_a_satisfied_range_is_local(self):
+        self.write("libs/my-lib/package.json", json.dumps({"name": "my-lib", "version": "1.4.0"}))
+        self.write("apps/web/package.json", json.dumps({"name": "web", "version": "1.0.0", "dependencies": {"my-lib": "^1.2.0"}}))
+        self.write("package.json", json.dumps({"workspaces": ["libs/*", "apps/*"], "dependencies": {"react": "^18.0.0"}}))
         self.assertEqual(self.run_module()["cases"], 0)
         self.assertEqual(self.calls, [])
 

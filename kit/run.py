@@ -646,6 +646,28 @@ REGEX_KEYWORDS = ("return", "typeof", "instanceof", "in", "of", "new", "delete",
                   "case", "do", "else", "yield", "await")
 
 
+def _function_expression_head(before):
+    """True when `before` ends with the head of a function expression (`= function name(...)`,
+    `(async function* (...)`): a `function` keyword whose parameter list closes `before`, in a
+    place where an expression is expected, not at the start of a statement."""
+    depth = 0
+    for k in range(len(before) - 1, -1, -1):
+        if before[k] == ")":
+            depth += 1
+        elif before[k] == "(":
+            depth -= 1
+            if depth == 0:
+                head = re.search(r"(?:\basync\s+)?\bfunction\b\s*\*?\s*(?:[A-Za-z_$][\w$]*)?\s*$", before[:k])
+                if not head:
+                    return False
+                lead = before[:head.start()].rstrip()
+                if not lead or lead.endswith((";", "{", "}", ")")):
+                    return False   # a declaration: function f() {} starts and ends a statement
+                word = re.search(r"[A-Za-z_$][\w$]*$", lead)
+                return not word or word.group(0) in REGEX_KEYWORDS   # return function () {}, x = function...
+    return False
+
+
 def _regex_can_start(code):
     """True when a "/" after `code` begins a JS regex literal rather than a division: after an
     operator, an opening bracket, a comma or semicolon, a keyword, or at the start."""
@@ -667,6 +689,8 @@ def _regex_can_start(code):
                 depth -= 1
                 if depth == 0:
                     before = stripped[:k].rstrip()
+                    if before.endswith(")") and _function_expression_head(before):
+                        return False   # function () {} / 2: the body ends an expression, so "/" divides (Codex on #29)
                     if not before or before.endswith(("=>", ")", ";", "{", "}")):
                         return True
                     # A declaration body (class X {}, class X extends Y {}, TS interface/enum/
@@ -1173,17 +1197,105 @@ def workspace_names(root, rev):
         spaces = spaces.get("packages")
     if not isinstance(spaces, list):
         return set()
-    names = set()
+    names = {}
     for path in tracked(root, rev):
         folder = path.rsplit("/", 1)[0] if "/" in path else ""
         if path.endswith("/package.json") and any(isinstance(g, str) and fnmatch.fnmatch(folder, g.rstrip("/")) for g in spaces):
             try:
-                own = json.loads(file_at(root, rev, path) or "").get("name")
+                data = json.loads(file_at(root, rev, path) or "")
+                own, version = data.get("name"), data.get("version")
             except (ValueError, AttributeError):
                 continue
             if isinstance(own, str):
-                names.add(("npm", own))
+                names[("npm", own)] = version if isinstance(version, str) else None
     return names
+
+
+def _semver(text):
+    m = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", text.strip())
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def _semver_satisfies(version, spec):
+    """Does `version` satisfy an npm range? Covers ||, hyphen ranges, comparators, ^, ~ and x-ranges.
+    None when the range isn't understood, so the caller keeps the safe reading (npm links a
+    workspace only when its version satisfies the range: Codex on #29)."""
+    if spec.strip() in ("", "*"):
+        return True
+    v = _semver(version or "")
+    if v is None:
+        return None
+
+    def partial(text):
+        m = re.fullmatch(r"v?(\d+|[xX*])(?:\.(\d+|[xX*]))?(?:\.(\d+|[xX*]))?(?:[-+][\w.+-]*)?", text)
+        if not m:
+            return None
+        return [None if g is None or g in "xX*" else int(g) for g in m.groups()]
+
+    def bounds(op, text):
+        """[(op, tuple)] comparators for one token."""
+        p = partial(text)
+        if p is None:
+            raise ValueError(text)
+        filled = [x if x is not None else 0 for x in p]
+        n = next((i for i, x in enumerate(p) if x is None), 3)   # count of given parts
+        lo = tuple(filled)
+        def bump(i):
+            t = filled[:i] + [0] * (3 - i)
+            t[i - 1] += 1
+            return tuple(t)
+        if op in ("", "="):
+            return [(">=", lo), ("<", bump(n))] if n < 3 else [("=", lo)] if n else []
+        if op == "^":
+            first = next((i for i, x in enumerate(filled[:max(n, 1)]) if x), max(n, 1) - 1)
+            return [(">=", lo), ("<", bump(min(first + 1, n) if n else 1))] if n else []
+        if op == "~":
+            return [(">=", lo), ("<", bump(min(2, n) if n > 1 else 1))] if n else []
+        if op == ">":
+            return [(">=", bump(n))] if n < 3 else [(">", lo)]
+        if op == "<=":
+            return [("<", bump(n))] if n < 3 else [("<=", lo)]
+        return [(op, lo)]   # >= and <
+
+    def check(comps):
+        ops = {"=": v.__eq__, ">=": v.__ge__, "<=": v.__le__, ">": v.__gt__, "<": v.__lt__}
+        return all(ops[op](t) for op, t in comps)
+
+    spec = spec.strip()
+    if spec == "latest":
+        return None
+    try:
+        for alt in spec.split("||"):
+            alt = alt.strip()
+            hyphen = re.fullmatch(r"(\S+)\s+-\s+(\S+)", alt)
+            if hyphen:
+                comps = bounds(">=", hyphen.group(1)) + bounds("<=", hyphen.group(2))
+            else:
+                comps = []
+                for tok in re.findall(r"(>=|<=|>|<|=|\^|~>?)?\s*([^\s<>=^~]+)", alt):
+                    comps += bounds(tok[0].replace("~>", "~"), tok[1])
+            if not alt or check(comps):
+                return True
+        return False
+    except ValueError:
+        return None
+
+
+def npm_registry_specs(text):
+    """{name: [range]} for the registry declarations in one package.json (local ones such as
+    workspace:* or file: are left out)."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return {}
+    specs = {}
+    for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+        section = data.get(key) if isinstance(data, dict) else None
+        if isinstance(section, dict):
+            for pkg, spec in section.items():
+                if isinstance(spec, str) and not NPM_LOCAL.search(spec.strip()):
+                    specs.setdefault(pkg, []).append(spec)
+    return specs
 
 
 def repository_packages(root, rev, locations=None):
@@ -1221,8 +1333,16 @@ def repository_packages(root, rev, locations=None):
             if target in files and target not in seen:
                 seen.add(target)
                 queue.append((target, top))
+    # A sibling workspace is linked, not fetched, but only when its version satisfies every range
+    # declared for it; otherwise npm goes to the registry (Codex on #29).
     own = workspace_names(root, rev)
-    return {key: registry for key, registry in packages.items() if key not in own}
+    ranges = {}
+    for path in tracked(root, rev):
+        if path.rsplit("/", 1)[-1] == "package.json" and own:
+            for pkg, specs in npm_registry_specs(file_at(root, rev, path) or "").items():
+                ranges.setdefault(("npm", pkg), []).extend(specs)
+    return {key: registry for key, registry in packages.items()
+            if key not in own or any(_semver_satisfies(own[key], r) is not True for r in ranges.get(key, []))}
 
 
 
