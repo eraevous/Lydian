@@ -695,7 +695,17 @@ def _regex_can_start(code):
                         return True
                     # A declaration body (class X {}, class X extends Y {}, TS interface/enum/
                     # namespace) is a block too (Codex on #29).
-                    if re.search(r"\b(?:class|interface|enum|namespace|module)\b[^{};=()]*$", before):
+                    decl = re.search(r"\b(class|interface|enum|namespace|module)\b[^{};=()]*$", before)
+                    if decl:
+                        # A class in expression position (= class {}, (class {}), return class {})
+                        # ends an expression, so "/" divides; a class declaration is a statement
+                        # (Codex on #29).
+                        lead = before[:decl.start()].rstrip()
+                        word = re.search(r"[A-Za-z_$][\w$]*$", lead)
+                        if decl.group(1) == "class" and lead and (
+                                lead[-1] in "=(,:?[!&|+-*%<>~^" or (word and lead.endswith(word.group(0)) and word.group(0) in REGEX_KEYWORDS
+                                                                   and word.group(0) not in ("do", "else"))):
+                            return False
                         return True
                     word = re.search(r"[A-Za-z_$][\w$]*$", before)
                     return bool(word) and word.group(0) in ("else", "try", "finally", "do")

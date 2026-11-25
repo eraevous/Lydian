@@ -453,6 +453,10 @@ class TestTamperingTests(Base):
         self.write("src/fitting.test.js", 'const r = model.fit(x); profit(1); outfit("a");\ntest("works", () => { expect(r).toBe(1); });\n')
         self.run_module()
 
+    def test_division_after_a_class_expression_hides_nothing(self):
+        self.write("src/cexpr.test.js", 'const v = class {} / 2; fit("focused", () => {}); /x/.test("x");\n')
+        self.assert_flags("src/cexpr.test.js: new test file with skips 0 -> 1")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
