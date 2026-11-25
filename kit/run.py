@@ -21,6 +21,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import zlib
 
 VERSION = "0.1.0-prototype"
 
@@ -568,7 +569,9 @@ def telosmith(root, config, policy):
 # A decision id as a whole token: DEC-<n> (up to DEC-272) or DEC-YYYYMMDD-XXXX (DEC-272 on).
 DECISION_ID = re.compile(r"(?<![\w-])DEC-(?:\d{8}-[0-9A-HJKMNP-TV-Z]{4}|\d{1,4})(?![\w-])")
 TESTS_CHANGED = re.compile(r"(?m)^Tests-changed-because:[ \t]*\S")
-TEST_FILE = re.compile(r"(?:^|/)(?:test_[^/]*\.py|[^/]*_test\.py|tests\.py|[^/]*\.(?:test|spec)\.[cm]?[jt]sx?)$")
+# Jest also runs any JS/TS file under a __tests__ folder, with no .test suffix (Copilot on #29).
+TEST_FILE = re.compile(r"(?:^|/)(?:test_[^/]*\.py|[^/]*_test\.py|tests\.py|[^/]*\.(?:test|spec)\.[cm]?[jt]sx?)$"
+                       r"|(?:^|/)__tests__/(?:[^/]+/)*[^/]+\.[cm]?[jt]sx?$")
 PY_ASSERTS = re.compile(r"(?<![\w.])assert\b|\.assert[A-Z_]\w*\s*\(")
 PY_SKIPS = re.compile(r"\bmark\.(?:skip|skipif|xfail)\b|\bunittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b"
                       r"|\bpytest\.(?:skip|xfail)\s*\(|\.skipTest\s*\(")
@@ -645,7 +648,23 @@ def _regex_can_start(code):
     stripped = code.rstrip()
     if not stripped:
         return True
-    if stripped[-1] in "(,=:[!&|?{};+-*%<>~^":
+    if stripped[-1] in "(,=:[!&|?{;+-*%<>~^":
+        return True
+    if stripped[-1] == "}":
+        # After a block, a "/" starts a statement, so it's a regex; after an object literal
+        # ({} / 2) it's division (Copilot on #29). Find the matching "{" and look before it.
+        depth = 0
+        for k in range(len(stripped) - 1, -1, -1):
+            if stripped[k] == "}":
+                depth += 1
+            elif stripped[k] == "{":
+                depth -= 1
+                if depth == 0:
+                    before = stripped[:k].rstrip()
+                    if not before or before.endswith(("=>", ")", ";", "{", "}")):
+                        return True
+                    word = re.search(r"[A-Za-z_$][\w$]*$", before)
+                    return bool(word) and word.group(0) in ("else", "try", "finally", "do")
         return True
     if stripped[-1] == ")":
         # After the condition of if/while/for/with, a "/" starts the body, so it's a regex
@@ -747,7 +766,9 @@ def _scan_code(text, i, python, nested):
                 out.append(c)
                 i += 1
                 continue
-            out.append('"')
+            # Keep a digest of the literal, not its text: two tests' names stay distinct (so a
+            # marker moved from one test to another is seen) and hex can't spell a marker.
+            out.append("%08x\"" % zlib.crc32(text[i:j + len(close)].encode("utf-8", "replace")))
             i = j + len(close)
             continue
         out.append(c)
@@ -774,6 +795,42 @@ def tampering_counts(path, text):
     return len(JS_ASSERTS.findall(text)), len(JS_SKIPS.findall(text))
 
 
+def marker_lines(path, text):
+    """The code lines (comments gone, strings digested) that carry a skip or focus marker, counted."""
+    from collections import Counter
+    python = path.endswith(".py")
+    pattern = PY_SKIPS if python else JS_SKIPS
+    lines = Counter()
+    for line in code_only(text, python).splitlines():
+        hits = len(pattern.findall(line))
+        if hits:
+            lines[re.sub(r"\s+", " ", line.strip())] += hits
+    return lines
+
+
+def warn_only_on_error(guard):
+    """Before enforcement, a guard that can't inspect the PR (a symlinked manifest, an invalid
+    fixture) warns like any other finding instead of failing (Copilot on #29)."""
+    import functools
+
+    @functools.wraps(guard)
+    def wrapped(root, config, policy):
+        try:
+            return guard(root, config, policy)
+        except KitError as exc:
+            ctx = None
+            try:
+                ctx, _ = pull_request_context(policy)
+            except KitError:
+                pass
+            if ctx and ctx["warn_only"]:
+                return {"cases": 0, "note": "pull request opened before enforcement: warning only",
+                        "warnings": [str(exc)]}
+            raise
+    return wrapped
+
+
+@warn_only_on_error
 def test_tampering(root, config, policy):
     """Fail a PR that deletes a test file, renames one away, lowers its assertion count or adds a skip.
 
@@ -818,13 +875,19 @@ def test_tampering(root, config, policy):
         if status[0] == "R" and not TEST_FILE.search(new):
             findings.append(f"{old}: test file renamed to non-test {new}")
             continue
-        before = tampering_counts(old, file_at(root, ctx["base"], old) or "")
-        after = tampering_counts(new, file_at(root, "HEAD", new) or "")
+        base_text, head_text = file_at(root, ctx["base"], old) or "", file_at(root, "HEAD", new) or ""
+        before, after = tampering_counts(old, base_text), tampering_counts(new, head_text)
         label = old if old == new else f"{old} -> {new}"
         if after[0] < before[0]:
             findings.append(f"{label}: assertions {before[0]} -> {after[0]}")
         if after[1] > before[1]:
             findings.append(f"{label}: skips {before[1]} -> {after[1]}")
+        else:
+            # Same count, different place: removing one skip mustn't cancel a new one elsewhere
+            # (Copilot on #29). Compare the marker lines themselves.
+            moved = marker_lines(new, head_text) - marker_lines(old, base_text)
+            if moved:
+                findings.append(f"{label}: {sum(moved.values())} new skip or focus marker(s) on lines that had none at base")
     cleared = DECISION_ID.search(ctx["body"]) or TESTS_CHANGED.search(ctx["body"])
     cases = sum(1 for p in tracked(root, "HEAD") if TEST_FILE.search(p))
     return guard_result(findings, ctx, cleared and cleared.group(0).strip(), cases,
@@ -894,6 +957,14 @@ def manifest_packages(path, text):
     else:   # requirements*.txt
         for line in text.splitlines():
             line = line.split(" #", 1)[0].strip()
+            editable = re.match(r"(?:-e|--editable)(?:\s+|=)(\S+)", line)
+            if editable:
+                # A named editable install (-e git+...#egg=name) is a new non-registry package; an
+                # unnamed local one (-e .) names nothing (Copilot on #29).
+                egg = re.search(r"#egg=([A-Za-z0-9][A-Za-z0-9._-]*)", editable.group(1))
+                if egg:
+                    specs.append(f"{egg.group(1)} @ editable")
+                continue
             if line and not line.startswith(("#", "-", ".", "/")) and (
                     "://" not in line or re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*\s*(?:\[[^\]]*\])?\s*@", line)):
                 # A named direct reference (name @ https://...) is a new non-registry package: it
@@ -958,12 +1029,16 @@ def workspace_names(root, rev):
     return names
 
 
-def repository_packages(root, rev):
+def repository_packages(root, rev, locations=None):
+    """{key: registry?} across the repository's manifests; `locations`, when given, collects the
+    manifest paths that declare each registry key."""
     packages = {}
     for path in tracked(root, rev):
         if is_manifest(path):
             for key, registry in manifest_packages(path, file_at(root, rev, path) or "").items():
                 packages[key] = packages.get(key, False) or registry
+                if locations is not None and registry:
+                    locations.setdefault(key, set()).add(path)
     own = workspace_names(root, rev)
     return {key: registry for key, registry in packages.items() if key not in own}
 
@@ -979,22 +1054,26 @@ def is_private_url(url):
 
 
 def private_registries(root):
-    """Ecosystems (or npm scopes) this repository resolves through a registry other than the public
-    one. A public 404 there proves nothing, so it's reported as unconfirmed (Codex on #29). Only a
-    configured URL whose host isn't the public registry counts: configuring the public registry
-    explicitly exempts nothing (Codex on #29)."""
+    """Where this repository resolves through a registry other than the public one, as
+    {(token, scope)}: token is "npm", "npm:@scope" or "pypi"; scope is the folder a config file
+    governs ("dir/") or the one file it governs. A public 404 there proves nothing, so it's
+    reported as unconfirmed (Codex on #29). Only a configured URL whose host isn't the public
+    registry counts (Codex on #29), and only for the manifests that config applies to (Copilot on
+    #29): a project .npmrc covers its own folder (the root one covers every workspace), a pyproject
+    or uv.toml index covers its own folder, a requirements index-url covers that file."""
     import tomllib
     private = set()
     for path in tracked(root, "HEAD"):
         name = path.rsplit("/", 1)[-1]
+        folder = path[: -len(name)]
         if name == ".npmrc":
             for line in (file_at(root, "HEAD", path) or "").splitlines():
                 key, _, value = line.partition("=")
                 key = key.strip()
                 if key == "registry" and is_private_url(value):
-                    private.add("npm")
+                    private.add(("npm", folder))
                 elif key.startswith("@") and key.endswith(":registry") and is_private_url(value):
-                    private.add("npm:" + key[: -len(":registry")])
+                    private.add(("npm:" + key[: -len(":registry")], folder))
         elif name in ("pyproject.toml", "uv.toml"):
             try:
                 data = tomllib.loads(file_at(root, "HEAD", path) or "")
@@ -1007,13 +1086,22 @@ def private_registries(root):
             for group in entries:
                 for entry in group if isinstance(group, list) else []:
                     if isinstance(entry, dict) and isinstance(entry.get("url"), str) and is_private_url(entry["url"]):
-                        private.add("pypi")
-        elif name in ("pip.conf", "pip.ini") or (is_manifest(path) and name != "package.json"):
+                        private.add(("pypi", folder))
+        elif is_manifest(path) and name != "package.json":
             for match in re.finditer(r"(?m)^\s*(?:--(?:extra-)?index-url|-i|(?:extra-)?index-url)\s*[=\s]\s*(\S+)",
                                      file_at(root, "HEAD", path) or ""):
                 if is_private_url(match.group(1)):
-                    private.add("pypi")
+                    private.add(("pypi", path))
     return private
+
+
+def privately_resolved(token, manifests, private):
+    """True when every manifest declaring the package is governed by a private config for token."""
+    def covered(manifest):
+        folder = manifest[: len(manifest) - len(manifest.rsplit("/", 1)[-1])]
+        return any(t == token and (scope == manifest or scope == folder or (t.startswith("npm") and scope == ""))
+                   for t, scope in private)
+    return bool(manifests) and all(covered(m) for m in manifests)
 
 
 def registry_status(url):
@@ -1037,6 +1125,7 @@ def registry_url(ecosystem, name):
     return f"https://registry.npmjs.org/{quote(name, safe='@')}"
 
 
+@warn_only_on_error
 def new_dependencies(root, config, policy):
     """Fail a PR that adds a package without naming a decision, or adds one that doesn't exist.
 
@@ -1051,7 +1140,8 @@ def new_dependencies(root, config, policy):
     if skipped:
         return skipped
     before = repository_packages(root, ctx["base"])
-    after = repository_packages(root, "HEAD")
+    where = {}
+    after = repository_packages(root, "HEAD", where)
     # New, or switched from a local source (file:, path, git) to the registry: either way a registry
     # package arrives (Codex security review on #29).
     added = sorted(key for key in after if key not in before or (after[key] and not before[key]))
@@ -1062,7 +1152,9 @@ def new_dependencies(root, config, policy):
             continue
         status = registry_status(registry_url(ecosystem, name))
         scope = f"npm:{name.split('/')[0]}" if name.startswith("@") else None
-        if status == 404 and (ecosystem in private or scope in private):
+        manifests = where.get((ecosystem, name), set())
+        if status == 404 and (privately_resolved(ecosystem, manifests, private)
+                              or (scope and privately_resolved(scope, manifests, private))):
             warnings.append(f"{ecosystem}:{name}: not on the public registry; this repository uses a private one, so unconfirmed")
         elif status == 404:
             findings.append(f"{ecosystem}:{name}: package does not exist (possibly invented)")

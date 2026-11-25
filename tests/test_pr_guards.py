@@ -198,6 +198,26 @@ class TestTamperingTests(Base):
         self.assert_flags("src/ctl2.test.js: new test file with skips 0 -> 2")
         self.assertEqual(kit.tampering_counts("a.test.js", "const q = g(x) / 2; expect(q).toBe(1); const r = h(y) / 3;\n"), (1, 0))
 
+    def test_jest_tests_folder_without_suffix(self):
+        self.write("src/__tests__/example.ts", 'test.only("focused", () => {});\n')
+        self.assert_flags("src/__tests__/example.ts: new test file with skips 0 -> 1")
+
+    def test_division_after_an_object_literal_hides_nothing(self):
+        self.write("src/obj.test.js", 'const x = {} / 2; test.only("focused", () => {}); const y = {} / 3;\n')
+        self.assert_flags("src/obj.test.js: new test file with skips 0 -> 1")
+
+    def test_moving_a_skip_to_another_test_is_seen(self):
+        self.write("src/app.test.ts", JS_TEST + 'test.skip("a", () => {});\ntest("b", () => {});\n')
+        self.env["KAIROS_BASE_SHA"] = self.commit("with a skip")
+        self.write("src/app.test.ts", JS_TEST + 'test("a", () => {});\ntest.only("b", () => {});\n')
+        self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
+
+    def test_symlink_before_enforcement_only_warns(self):
+        self.write("src/payload.js", 'test.only("focused", () => {});\n')
+        (self.repo / "src/focus.test.js").symlink_to("payload.js")
+        out = self.run_module(KAIROS_PR_CREATED_AT="2026-11-25T12:00:00Z")
+        self.assertTrue(any("a symlink" in w for w in out["warnings"]))
+
     # Clean decoys it must not flag.
     def test_untouched_tests_pass(self):
         self.write("README.md", "changed\n")
@@ -343,6 +363,28 @@ class NewDependencyTests(Base):
 
     def test_division_is_not_a_regex(self):
         self.assertEqual(kit.tampering_counts("a.test.js", "const x = a / 2; expect(x).toBe(1); const y = b / 3;\n"), (1, 0))
+
+    def test_named_editable_requirement_needs_a_decision(self):
+        self.write("requirements.txt", "requests==2.31\n-e git+https://example.com/new-lib.git#egg=new-lib\n--editable=.\n")
+        self.assert_flags("pypi:new-lib", "no decision id")
+        self.calls.clear()
+        self.run_module(KAIROS_PR_BODY="DEC-1")
+        self.assertEqual(self.calls, [])
+
+    def test_npmrc_in_another_folder_does_not_exempt_the_root(self):
+        self.write("fixtures/.npmrc", "registry=https://npm.corp.example/\n")
+        self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "invented-npm-zz": "1"}}))
+        self.assert_flags("npm:invented-npm-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
+    def test_requirements_index_url_covers_only_its_own_file(self):
+        self.write("other/requirements-dev.txt", "--index-url https://pypi.corp.example/simple\nrich\n")
+        self.write("requirements.txt", "requests==2.31\ninvented-pkg-zz\n")
+        self.assert_flags("pypi:invented-pkg-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
+
+    def test_invalid_manifest_before_enforcement_only_warns(self):
+        self.write("package.json", "{not json")
+        out = self.run_module(KAIROS_PR_CREATED_AT="2026-11-25T12:00:00Z")
+        self.assertTrue(any("not valid JSON" in w for w in out["warnings"]))
 
     def test_npm_alias_target_is_looked_up(self):
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "helper": "npm:invented-pkg-zz@1",
