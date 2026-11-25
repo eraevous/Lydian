@@ -1326,6 +1326,9 @@ def _semver_satisfies(version, spec):
         return None
 
 
+ALIAS_RANGE = "npm-alias"   # never satisfied by _semver_satisfies (it can't read it)
+
+
 def npm_registry_specs(text):
     """{name: [range]} for the registry declarations in one package.json (local ones such as
     workspace:* or file: are left out)."""
@@ -1338,7 +1341,12 @@ def npm_registry_specs(text):
         section = data.get(key) if isinstance(data, dict) else None
         if isinstance(section, dict):
             for pkg, spec in section.items():
-                if isinstance(spec, str) and not NPM_LOCAL.search(spec.strip()):
+                alias = re.match(r"npm:(@?[^@\s]+)", spec.strip()) if isinstance(spec, str) else None
+                if alias:
+                    # An alias resolves its target in the registry, never a workspace (Codex on
+                    # #29): a range no workspace version can satisfy keeps the target's checks.
+                    specs.setdefault(alias.group(1), []).append(ALIAS_RANGE)
+                elif isinstance(spec, str) and not NPM_LOCAL.search(spec.strip()):
                     specs.setdefault(pkg, []).append(spec)
     return specs
 

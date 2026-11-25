@@ -664,6 +664,11 @@ class NewDependencyTests(Base):
         self.run_module(KAIROS_PR_BODY="DEC-1")
         self.assertEqual(self.calls, [])
 
+    def test_alias_to_a_workspace_name_is_a_registry_package(self):
+        self.write("libs/invented-workspace-zz/package.json", json.dumps({"name": "invented-workspace-zz", "version": "1.0.0"}))
+        self.write("package.json", json.dumps({"workspaces": ["libs/*"], "dependencies": {"react": "^18.0.0", "alias": "npm:invented-workspace-zz@^2.0.0"}}))
+        self.assert_flags("npm:invented-workspace-zz")
+
     def test_version_bump_is_not_new(self):
         self.write("requirements.txt", "requests==2.32\n")
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.3.0"}}))
