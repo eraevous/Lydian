@@ -16,6 +16,7 @@ import glob
 import hashlib
 import json
 import os
+import posixpath
 import re
 from pathlib import Path
 import subprocess
@@ -570,7 +571,8 @@ def telosmith(root, config, policy):
 DECISION_ID = re.compile(r"(?<![\w-])DEC-(?:\d{8}-[0-9A-HJKMNP-TV-Z]{4}|\d{1,4})(?![\w-])")
 TESTS_CHANGED = re.compile(r"(?m)^Tests-changed-because:[ \t]*\S")
 # Jest also runs any JS/TS file under a __tests__ folder, with no .test suffix (Copilot on #29).
-TEST_FILE = re.compile(r"(?:^|/)(?:test_[^/]*\.py|[^/]*_test\.py|tests\.py|[^/]*\.(?:test|spec)\.[cm]?[jt]sx?)$"
+# unittest's default discovery loads test*.py (not only test_*.py) (Codex security review on #29).
+TEST_FILE = re.compile(r"(?:^|/)(?:test[^/]*\.py|[^/]*_test\.py|tests\.py|[^/]*\.(?:test|spec)\.[cm]?[jt]sx?)$"
                        r"|(?:^|/)__tests__/(?:[^/]+/)*[^/]+\.[cm]?[jt]sx?$")
 # Whitespace may sit around a member-access dot (and a stripped comment leaves a space): "test. only("
 # still runs, so every pattern allows it (Codex on #29).
@@ -805,7 +807,9 @@ def _describe_spans(code):
     """(start, end, name) for each describe()/suite()/context() block in scanned JS code: from the
     call to the brace that closes its callback body, named by its title's string digest."""
     spans = []
-    for d in re.finditer(r"(?<![\w.$])(?:describe|suite|context)\b[\s.\w]*\(", code):
+    # A tagged-template table (describe.each`...`) is a string digest before the call (Codex
+    # security review on #29).
+    for d in re.finditer(r'(?<![\w.$])(?:describe|suite|context)\b[\s.\w]*(?:"[^(){};]*?[0-9a-f]{8}"\s*)?\(', code):
         # Follow chained calls (describe.each([...])("A", ...)) past their data to the real
         # callback, and take the title from the call's own arguments (Codex on #29).
         call = d.end() - 1
@@ -1161,8 +1165,29 @@ def repository_packages(root, rev, locations=None):
                 packages[key] = packages.get(key, False) or registry
                 if locations is not None and registry:
                     locations.setdefault(key, set()).add(path)
+    # pip follows -r/--requirement includes, whatever the included file is called: read them too,
+    # recursively, within the repository's tracked files (Codex security review on #29).
+    files = set(tracked(root, rev))
+    queue = [p for p in files if re.fullmatch(r"requirements[^/]*\.txt", p.rsplit("/", 1)[-1])]
+    seen = set(queue)
+    already = {p for p in files if is_manifest(p)}
+    while queue:
+        path = queue.pop()
+        text = file_at(root, rev, path) or ""
+        if path not in already:
+            for key, registry in manifest_packages("requirements.txt", text).items():
+                packages[key] = packages.get(key, False) or registry
+                if locations is not None and registry:
+                    locations.setdefault(key, set()).add(path)
+        folder = path.rsplit("/", 1)[0] if "/" in path else ""
+        for inc in re.finditer(r"(?m)^\s*(?:-r|--requirement)(?:\s+|=)(\S+)", text):
+            target = posixpath.normpath(posixpath.join(folder, inc.group(1)))
+            if target in files and target not in seen:
+                seen.add(target)
+                queue.append(target)
     own = workspace_names(root, rev)
     return {key: registry for key, registry in packages.items() if key not in own}
+
 
 
 PUBLIC_REGISTRY_HOSTS = {"registry.npmjs.org", "registry.yarnpkg.com", "pypi.org", "pypi.python.org",

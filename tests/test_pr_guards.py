@@ -365,6 +365,20 @@ class TestTamperingTests(Base):
         self.write("src/app.test.ts", JS_TEST + body % ("", ".skip"))
         self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
 
+    def test_deleting_a_unittest_discovered_testfoo_file(self):
+        self.write("tests/testalpha.py", "import unittest\nclass T(unittest.TestCase):\n    def test_a(self):\n        self.assertTrue(1)\n")
+        self.env["KAIROS_BASE_SHA"] = self.commit("testalpha")
+        (self.repo / "tests/testalpha.py").unlink()
+        self.assert_flags("tests/testalpha.py: test file deleted")
+
+    def test_moving_a_skip_between_tagged_template_describes_is_seen(self):
+        body = ('describe.each`\n  a | b\n  ${1} | ${2}\n`("A", () => {\n  test%s("works", () => {});\n});\n'
+                'describe.each`\n  a | b\n  ${1} | ${2}\n`("B", () => {\n  test%s("works", () => {});\n});\n')
+        self.write("src/app.test.ts", JS_TEST + body % (".skip", ""))
+        self.env["KAIROS_BASE_SHA"] = self.commit("skip in A")
+        self.write("src/app.test.ts", JS_TEST + body % ("", ".skip"))
+        self.assert_flags("src/app.test.ts: 1 new skip or focus marker(s)")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 
@@ -480,6 +494,11 @@ class NewDependencyTests(Base):
         self.write("package.json", "{not json")
         out = self.run_module(KAIROS_PR_CREATED_AT="2026-11-25T12:00:00Z")
         self.assertTrue(any("not valid JSON" in w for w in out["warnings"]))
+
+    def test_requirements_include_is_followed(self):
+        self.write("requirements.txt", "requests==2.31\n-r deps/attacker-deps.in\n")
+        self.write("deps/attacker-deps.in", "invented-pkg-zz\n-r ../requirements.txt\n")
+        self.assert_flags("pypi:invented-pkg-zz", "possibly invented", KAIROS_PR_BODY="DEC-1")
 
     def test_npm_alias_target_is_looked_up(self):
         self.write("package.json", json.dumps({"dependencies": {"react": "^18.0.0", "helper": "npm:invented-pkg-zz@1",
