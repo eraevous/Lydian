@@ -1,8 +1,8 @@
 # Adding a hook fingerprint to hook-guard's allowlist
 
-`hook-guard` (see the README's module table) fails any agent hook command whose SHA-256 isn't listed in the suite: under `"*"` for every repository, or under one repository's name. Adding a fingerprint widens what may run on the machine of anyone who opens an agent session in a Kairos repository, so every addition follows the steps below. Any lane (an agent) may follow them; only Zach's merge approves one.
+`hook-guard` (see the README's module table) fails any agent hook command whose fingerprint (a SHA-256 content hash of the command text) isn't listed in the suite: under `"*"` for every repository, or under one repository's name. Adding a fingerprint widens what may run on the machine of anyone who opens an agent session in a Kairos repository, so every addition follows the steps below. Any lane (an agent) may follow them; only a merge by Zach (Zach Rhodes, the owner) approves one.
 
-Written for handoff HO-LYDIAN-20261122-228P (Zach, 2026-11-22: "yes, with a protocol for doing so"; DEC-263 clause 5). Earlier additions (#9, #10, #13, #20) were made without a written protocol; their records are in the table at the end.
+Written for handoff (a delegated task record) HO-LYDIAN-20261122-228P (Zach, 2026-11-22: "yes, with a protocol for doing so"; DEC-263 clause 5, an entry in the Kairos decision ledger, which works like Architecture Decision Records). Earlier additions (#9, #10, #13, #20) were made without a written protocol; their records are in the table at the end.
 
 ## Steps
 
@@ -33,7 +33,7 @@ PYTHONPATH=/tmp/ts/src python3 -m aec init --hooks --hook-style <line|inline> .
 # fingerprint .aec/snippets/claude-settings.json with the step 1 script
 ```
 
-The rendered fingerprint must equal step 1's. Run Telosmith only from Zach's own repository at the pinned commit; installing anything from elsewhere needs his approval first (lane rules §17).
+The rendered fingerprint must equal step 1's. Run Telosmith only from Zach's own repository at the pinned commit; installing anything from elsewhere needs his approval first (the agents' lane rules, §17).
 
 If they differ, **stop**: don't add the fingerprint. An explanation doesn't satisfy this step, even a true one (a local edit, a different `--hook-style`, a render from another commit): the allowlist may hold only what the caller's pinned source produces. Name the differing bytes and report them to the repository's owner lane, who fixes the cause: re-render the hook at the pin, or move the pin in its own PR. Then repeat steps 1 and 2 until the two fingerprints match.
 
@@ -74,7 +74,7 @@ Open one PR, marked ready (not draft), titled `hook-guard: allow <what> (<first 
 Once the repository that needed the hook has merged it, look for fingerprints no repository uses any more:
 
 - read `.claude/settings.json` (and any committed `settings.local.json`) on the default branch of **every** repository that calls Lydian, **and** on their open PRs, before removing anything;
-- remove only fingerprints that none of those use, in their own PR, naming each one and what replaced it (#10 is the precedent, after the AEC lane's 63AR check);
+- remove only fingerprints that none of those use, in their own PR, naming each one and what replaced it (#10 is the precedent, after the Telosmith agent's (`claude:aec`) 63AR check);
 - remove its row in the table in the same PR.
 
 A removal can turn a repository red, so the PR names every caller checked and how.
