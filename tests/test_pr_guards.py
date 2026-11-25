@@ -218,7 +218,24 @@ class TestTamperingTests(Base):
         out = self.run_module(KAIROS_PR_CREATED_AT="2026-11-25T12:00:00Z")
         self.assertTrue(any("a symlink" in w for w in out["warnings"]))
 
+    def test_regex_after_a_class_declaration_hides_nothing(self):
+        self.write("src/cls.test.js", "class Helper {} /can't/.test(\"x\"); test.only('focused', () => {});\n")
+        self.assert_flags("src/cls.test.js: new test file with skips 0 -> 1")
+
+    def test_moving_a_python_skip_decorator_is_seen(self):
+        self.write("tests/test_x.py", PY_TEST.replace("def test_b", "@pytest.mark.skip\ndef test_b"))
+        self.env["KAIROS_BASE_SHA"] = self.commit("skip b")
+        text = PY_TEST.replace("    def test_a", "    @pytest.mark.skip\n    def test_a")
+        self.write("tests/test_x.py", text)
+        self.assert_flags("tests/test_x.py: 1 new skip or focus marker(s)")
+
     # Clean decoys it must not flag.
+    def test_editing_a_skipped_tests_body_is_not_a_new_skip(self):
+        self.write("src/app.test.ts", JS_TEST + 'test.skip("a", () => { expect(1).toBe(1); });\n')
+        self.env["KAIROS_BASE_SHA"] = self.commit("skipped a")
+        self.write("src/app.test.ts", JS_TEST + 'test.skip("a", () => { expect(2).toBe(2); });\n')
+        self.run_module()
+
     def test_untouched_tests_pass(self):
         self.write("README.md", "changed\n")
         self.assertEqual(self.run_module()["cases"], 2)

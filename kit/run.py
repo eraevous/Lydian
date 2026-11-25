@@ -663,6 +663,10 @@ def _regex_can_start(code):
                     before = stripped[:k].rstrip()
                     if not before or before.endswith(("=>", ")", ";", "{", "}")):
                         return True
+                    # A declaration body (class X {}, class X extends Y {}, TS interface/enum/
+                    # namespace) is a block too (Codex on #29).
+                    if re.search(r"\b(?:class|interface|enum|namespace|module)\b[^{};=()]*$", before):
+                        return True
                     word = re.search(r"[A-Za-z_$][\w$]*$", before)
                     return bool(word) and word.group(0) in ("else", "try", "finally", "do")
         return True
@@ -796,16 +800,25 @@ def tampering_counts(path, text):
 
 
 def marker_lines(path, text):
-    """The code lines (comments gone, strings digested) that carry a skip or focus marker, counted."""
+    """Each skip or focus marker's registration, counted: the code up to the marker plus the test's
+    name (a string digest in JS, the next def in Python), not the test's body, so editing a skipped
+    test's body isn't read as a new skip (Codex on #29) while moving a marker to another test is
+    (Copilot on #29). Comments are gone and strings digested (code_only)."""
     from collections import Counter
     python = path.endswith(".py")
     pattern = PY_SKIPS if python else JS_SKIPS
-    lines = Counter()
-    for line in code_only(text, python).splitlines():
-        hits = len(pattern.findall(line))
-        if hits:
-            lines[re.sub(r"\s+", " ", line.strip())] += hits
-    return lines
+    rows = code_only(text, python).splitlines()
+    marks = Counter()
+    for n, line in enumerate(rows):
+        for m in pattern.finditer(line):
+            head = re.sub(r"\s+", " ", line[:m.end()].strip())
+            if python:
+                name = next((d.group(1) for later in rows[n:] for d in [re.search(r"\bdef\s+(\w+)", later)] if d), "")
+            else:
+                d = re.search(r'[0-9a-f]{8}"', line[m.end():])
+                name = d.group(0) if d else ""
+            marks[f"{head} {name}"] += 1
+    return marks
 
 
 def warn_only_on_error(guard):
