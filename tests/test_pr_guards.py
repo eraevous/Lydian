@@ -305,6 +305,11 @@ class TestTamperingTests(Base):
             self.run_module(KAIROS_BASE_SHA="")
 
 
+    def test_comment_or_space_after_the_dot_hides_nothing(self):
+        self.write("src/dot.test.js", 'test./* comment */only("focused", () => {});\ndescribe.\n  skip("s", () => {});\n')
+        self.write("tests/test_dot.py", "import pytest\n@pytest.mark. skip\ndef test_a():\n    assert 1\n")
+        self.assert_flags("src/dot.test.js: new test file with skips 0 -> 2", "tests/test_dot.py: new test file with skips 0 -> 1")
+
 class NewDependencyTests(Base):
     module = "new-dependencies"
 

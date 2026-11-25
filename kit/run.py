@@ -572,11 +572,13 @@ TESTS_CHANGED = re.compile(r"(?m)^Tests-changed-because:[ \t]*\S")
 # Jest also runs any JS/TS file under a __tests__ folder, with no .test suffix (Copilot on #29).
 TEST_FILE = re.compile(r"(?:^|/)(?:test_[^/]*\.py|[^/]*_test\.py|tests\.py|[^/]*\.(?:test|spec)\.[cm]?[jt]sx?)$"
                        r"|(?:^|/)__tests__/(?:[^/]+/)*[^/]+\.[cm]?[jt]sx?$")
-PY_ASSERTS = re.compile(r"(?<![\w.])assert\b|\.assert[A-Z_]\w*\s*\(")
-PY_SKIPS = re.compile(r"\bmark\.(?:skip|skipif|xfail)\b|\bunittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b"
-                      r"|\bpytest\.(?:skip|xfail)\s*\(|\.skipTest\s*\(")
+# Whitespace may sit around a member-access dot (and a stripped comment leaves a space): "test. only("
+# still runs, so every pattern allows it (Codex on #29).
+PY_ASSERTS = re.compile(r"(?<![\w.])assert\b|\.\s*assert[A-Z_]\w*\s*\(")
+PY_SKIPS = re.compile(r"\bmark\s*\.\s*(?:skip|skipif|xfail)\b|\bunittest\s*\.\s*(?:skip|skipIf|skipUnless|expectedFailure)\b"
+                      r"|\bpytest\s*\.\s*(?:skip|xfail)\s*\(|\.\s*skipTest\s*\(")
 JS_ASSERTS = re.compile(r"(?<![\w.$])expect\s*\(|(?<![\w.$])assert\b")
-JS_SKIPS = re.compile(r"\.(?:skip|skipIf|only|todo)(?=\s*[.(])|(?<![\w.$])x(?:it|test|describe)(?=\s*[.(])")   # also .only.each(...) (Codex on #29)
+JS_SKIPS = re.compile(r"\.\s*(?:skip|skipIf|only|todo)(?=\s*[.(])|(?<![\w.$])x(?:it|test|describe)(?=\s*[.(])")   # also .only.each(...) (Codex on #29)
 BOTS_EXEMPT = ("dependabot[bot]",)
 
 
