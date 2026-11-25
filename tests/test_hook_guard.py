@@ -534,6 +534,22 @@ class HookGuard(unittest.TestCase):
                 self.assertEqual(r["gate"], "failed", r)
                 self.assertRegex(r["modules"][0]["reason"], "variant|outside")
 
+    def test_any_symlinked_codex_folder_fails_even_dangling(self):
+        # Copilot on #27: a dangling symlink lands in os.walk's filenames, and a live one is listed
+        # but not walked; either can expose hooks on a machine where its target exists.
+        for parts, target in (((".CODEX",), "/nonexistent-codex"), (("sub", ".codex"), "/nonexistent-codex"),
+                              (("sub", ".codex"), "elsewhere")):
+            with self.subTest(parts=parts, target=target):
+                tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+                self.repo = Path(tmp.name)
+                (self.repo / "sub" / "elsewhere").mkdir(parents=True)
+                link = self.repo.joinpath(*parts)
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(target)
+                r = self.run_guard()
+                self.assertEqual(r["gate"], "failed", r)
+                self.assertIn("symlink", r["modules"][0]["reason"])
+
     def test_symlinked_codex_config_fails(self):
         (self.repo / "config").mkdir()
         (self.repo / "config" / "c.toml").write_text(self.inline_hook(OTHER))

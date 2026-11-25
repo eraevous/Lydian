@@ -503,9 +503,13 @@ def guard_codex_paths(root):
     for rel in (".codex",) + tuple(f".codex/{f}" for f in CODEX_HOOK_FILES):
         if (root / rel).is_symlink():
             raise KitError("a guarded Codex hooks path is a symlink")
-    for dirpath, dirnames, _filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != ".git"]
         here = Path(dirpath)
+        # Copilot on #27: a symlinked .codex anywhere, live (listed but not walked) or dangling (listed
+        # among files), can expose hooks CI never read on a machine where its target exists.
+        if any(norm(n) == ".codex" and (here / n).is_symlink() for n in dirnames + filenames):
+            raise KitError("a .codex folder is a symlink")
         for d in dirnames:
             if norm(d) != ".codex":
                 continue
