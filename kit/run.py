@@ -1381,8 +1381,8 @@ def repository_packages(root, rev, locations=None):
         folder = path.rsplit("/", 1)[0] if "/" in path else ""
         # pip accepts the short option attached (-rdeps.in) as well as -r deps.in and
         # --requirement=deps.in (Codex on #29).
-        for inc in re.finditer(r"(?m)^\s*(?:-r\s*=?\s*|--requirement(?:\s+|\s*=\s*))(\S+)", text):
-            target = posixpath.normpath(posixpath.join(folder, inc.group(1)))
+        for inc in include_paths(text):
+            target = posixpath.normpath(posixpath.join(folder, inc))
             if target in files and target not in seen:
                 seen.add(target)
                 queue.append((target, top))
@@ -1457,14 +1457,33 @@ def private_registries(root):
     return private
 
 
+def include_paths(text):
+    """The files a requirements text includes with -r/--requirement. pip splits option lines like
+    a shell, so a quoted path with spaces (-r "deps/dev requirements.in") is one argument (Codex on
+    #29); the short option may be attached (-rdeps.in) and the long one may take "=" (--requirement=x)."""
+    import shlex
+    out = []
+    for line in text.splitlines():
+        m = re.match(r"\s*(?:-r|--requirement(?=[\s=]))\s*=?\s*(.*)", line)
+        if not m or not m.group(1).strip():
+            continue
+        try:
+            args = shlex.split(m.group(1), comments=True)
+        except ValueError:
+            args = m.group(1).split()
+        if args:
+            out.append(args[0])
+    return out
+
+
 def requirements_includes(root, rev, top, files):
     """Every tracked file reached from `top` through -r/--requirement includes, once each."""
     out, queue, seen = [], [top], {top}
     while queue:
         path = queue.pop()
         folder = path.rsplit("/", 1)[0] if "/" in path else ""
-        for inc in re.finditer(r"(?m)^\s*(?:-r\s*=?\s*|--requirement(?:\s+|\s*=\s*))(\S+)", file_at(root, rev, path) or ""):
-            target = posixpath.normpath(posixpath.join(folder, inc.group(1)))
+        for inc in include_paths(file_at(root, rev, path) or ""):
+            target = posixpath.normpath(posixpath.join(folder, inc))
             if target in files and target not in seen:
                 seen.add(target)
                 out.append(target)
