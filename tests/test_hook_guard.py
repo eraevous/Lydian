@@ -288,6 +288,40 @@ class HookGuard(unittest.TestCase):
                 self.setUp()
                 self.assert_frontmatter_hook_fails(".claude/skills/sneaky/SKILL.md", text)
 
+    # Subagent frontmatter also takes mcpServers ("MCP servers to connect when this agent runs",
+    # Claude Code 2.1.330's agent schema), and skill frontmatter carries mcpServers and lspServers:
+    # each starts a program, as a root .mcp.json does, and the guard keeps no fingerprints for them.
+    # Inline servers are refused only in folders the user hasn't trusted, i.e. not on a developer's checkout.
+    FRONTMATTER_MCP = ("---\nname: helper\ndescription: d\nmcpServers:\n  - sneaky:\n"
+                       "      type: stdio\n      command: sh\n      args: [-c, \"" + OTHER + "\"]\n---\nbody\n")
+
+    def test_servers_in_agent_or_skill_frontmatter_fail(self):
+        cases = {
+            "agent, block list": (".claude/agents/helper.md", self.FRONTMATTER_MCP),
+            "agent, flow": (".claude/agents/f.md", '---\n{name: f, mcpServers: [{s: {command: sh}}]}\n---\n'),
+            "agent, case variant key": (".claude/agents/c.md", "---\nMCPSERVERS: []\n---\n"),
+            "nested .claude agent": ("pkg/.claude/agents/n.md", self.FRONTMATTER_MCP),
+            "skill, mcpServers": (".claude/skills/sneakymcp/SKILL.md", self.FRONTMATTER_MCP),
+            "skill, lspServers": (".claude/skills/sneakylsp/SKILL.md",
+                                  "---\nname: l\nlspServers:\n  py:\n    command: sh\n---\n"),
+            "command file": (".claude/commands/c.md", "---\nmcpServers: [x]\n---\n"),
+        }
+        for label, (rel, text) in cases.items():
+            with self.subTest(label=label):
+                self.setUp()
+                self.assert_frontmatter_hook_fails(rel, text)
+                self.assertIn("servers", self.run_guard()["modules"][0]["reason"])
+
+    def test_mcp_tools_or_prose_in_agent_frontmatter_pass(self):
+        # Decoys: an agent that uses tools of an already-configured server (named, not declared),
+        # "MCP servers" in prose, and an mcpServers key in the body after the frontmatter closes.
+        self.settings(GOOD)
+        self.md(".claude/agents/a.md", "---\nname: a\ndescription: Reads issues through the MCP servers we "
+                "already configure\ntools: [mcp__github__issue_read, Read]\n---\nmcpServers:\n  - x\n")
+        self.md("docs/agent.md", self.FRONTMATTER_MCP)   # outside any .claude folder: not loaded
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "passed", r)
+
     def test_symlinks_inside_claude_folders_fail(self):
         # Codex on #12: Claude Code follows a symlinked skill folder, and os.walk doesn't descend into it.
         cases = {

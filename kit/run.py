@@ -239,22 +239,29 @@ YAML_TAG = re.compile(r"(?:^|[\s\[\]{},:?-])!")
 # (Codex security review on #12). A skill that merely mentions git-lfs fails too.
 LFS_POINTER = re.compile(rb"(?i)git-lfs|hawser|\boid\s+sha256\s*:")
 
+# Frontmatter keys that make Claude Code start something, matched as casefolded raw text: hooks (skills,
+# subagents), mcpServers (subagents: "MCP servers to connect when this agent runs"; skills too) and
+# lspServers (skills). Probed in Claude Code 2.1.330's frontmatter schemas, 2026-11-23.
+FRONTMATTER_RUNNABLE_KEYS = ("hooks", "mcpservers", "lspservers")
+
 
 def frontmatter_declares_hooks(path):
-    """True if a markdown file's YAML frontmatter could hold a hooks key.
+    """True if a markdown file's YAML frontmatter could hold a hooks, mcpServers or lspServers key.
 
     Claude Code runs hooks declared in skill and subagent frontmatter (code.claude.com/docs/en/hooks,
     "Hooks in skills and agents"; the format is the settings one). Lydian keeps no fingerprints for
     them, so any frontmatter that could declare one fails: a hook that must exist goes in
-    .claude/settings.json, where it is checked.
+    .claude/settings.json, where it is checked. Servers declared there (mcpServers in a subagent,
+    mcpServers or lspServers in a skill) start programs the same way, so the same rule covers their
+    keys (FRONTMATTER_RUNNABLE_KEYS); an MCP server that must exist goes in the root .mcp.json.
 
     No YAML parser (no third-party dependencies), so the rule doesn't try to tell keys from values:
-    the frontmatter fails if the word "hooks" appears anywhere in it, in any case, or if it uses an
-    escape that could spell a letter or join two lines, or a YAML tag (which can build a key from
-    other text, as !!binary does). Key-recognition rules kept being bypassed by
-    YAML's other key forms (escaped, explicit "?", flow, tagged; Codex on #12); a key named hooks
-    has to contain those five letters in the raw text unless an escape builds them. The cost: a
-    description that mentions "hooks" fails too, and gets reworded.
+    the frontmatter fails if one of those words ("hooks", "mcpservers", "lspservers") appears anywhere
+    in it, in any case, or if it uses an escape that could spell a letter or join two lines, or a YAML
+    tag (which can build a key from other text, as !!binary does). Key-recognition rules kept being
+    bypassed by YAML's other key forms (escaped, explicit "?", flow, tagged; Codex on #12); a key
+    named hooks has to contain those five letters in the raw text unless an escape builds them. The
+    cost: a description that mentions "hooks" (or "mcpServers") fails too, and gets reworded.
 
     The opening line may carry spaces, but only an exact "---" line (split on "\\n" alone) closes the
     frontmatter, so no other line break, "--- " line or "..." can end it early for this check while
@@ -274,7 +281,7 @@ def frontmatter_declares_hooks(path):
     for line in lines[1:]:
         if line == "---":
             return False
-        if "hooks" in line.casefold():
+        if any(key in line.casefold() for key in FRONTMATTER_RUNNABLE_KEYS):
             return True
         if any(LETTER_ESCAPE.search(piece) or YAML_TAG.search(piece) for piece in LINE_BREAKS.split(line)):
             return True
@@ -407,9 +414,10 @@ def guard_agent_paths(root, names):
                         raise KitError("a file under .claude is a Git LFS pointer, whose real contents the guard can't inspect")
             if in_claude and norm(f).endswith(".md") and frontmatter_declares_hooks(here / f):
                 # The file's path is repository text, so it is not echoed.
-                raise KitError("a skill, subagent or command file under .claude declares hooks in its "
-                               "frontmatter; the guard can't fingerprint those, so declare the hook in "
-                               ".claude/settings.json")
+                raise KitError("a skill, subagent or command file under .claude declares hooks or servers "
+                               "(hooks, mcpServers, lspServers) in its frontmatter; the guard can't "
+                               "fingerprint those, so declare a hook in .claude/settings.json and an MCP "
+                               "server in the root .mcp.json")
 
 
 def guard_fingerprints(root, allowed, extras):
