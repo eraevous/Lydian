@@ -304,8 +304,14 @@ def norm(name):
     macOS and Windows treat `.CLAUDE/settings.local.json` or `.MCP.json` as the real file, and Win32
     path normalization drops trailing dots and spaces, so `.claude.` may name `.claude` there (handled
     by string normalization only; not demonstrated on a Windows checkout).
+    HFS+ also ignores some invisible code points when it compares names, so `.cl\u200caude` opens
+    as `.claude` on a Mac (Codex on #30); they're dropped first, using Git's own list
+    (utf8.c, is_hfs_dotgeneric).
     """
-    return name.rstrip(". ").casefold()
+    return HFS_IGNORABLE.sub("", name).rstrip(". ").casefold()
+
+
+HFS_IGNORABLE = re.compile("[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]")
 
 
 def hook_guard(root, config, policy):

@@ -456,6 +456,26 @@ class HookGuard(unittest.TestCase):
                 self.assertEqual(r["gate"], "failed", r)
                 self.assertIn("must never be committed", r["modules"][0]["reason"])
 
+    def test_hfs_ignorable_spellings_fail(self):
+        # Codex on #30: HFS+ ignores these code points when it compares names, so `.cr\u200cank`
+        # opens as `.crank` on a Mac checkout. Git's own list (utf8.c, is_hfs_dotgeneric).
+        self.untracked()
+        for ch in ("\u200c", "\u200d", "\u200e", "\u200f", "\u202a", "\u202e", "\u206a", "\u206f", "\ufeff"):
+            with self.subTest(ch=hex(ord(ch))):
+                tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+                self.repo = Path(tmp.name)
+                target = self.repo / f".cr{ch}ank" / "hooks" / "session-start.ts"
+                target.parent.mkdir(parents=True)
+                target.write_text("x")
+                self.assertEqual(self.run_guard("eraevous/special")["gate"], "failed")
+        # The same spelling of a guarded settings folder is an alias too.
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name)
+        (self.repo / ".cl\u200caude").mkdir()
+        (self.repo / ".cl\u200caude" / "settings.json").write_text(json.dumps({"hooks": {}}))
+        r = self.run_guard()
+        self.assertEqual(r["gate"], "failed", r)
+
     def test_symlinked_never_tracked_folder_fails(self):
         self.untracked()
         (self.repo / ".crank").symlink_to("/nonexistent-crank")
