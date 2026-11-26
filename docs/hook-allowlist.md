@@ -1,6 +1,6 @@
 # Adding a hook fingerprint to hook-guard's allowlist
 
-`hook-guard` (see the README's module table) fails any agent hook command whose fingerprint (a SHA-256 content hash of the command text) isn't listed in the suite: under `"*"` for every repository, or under one repository's name. Adding a fingerprint widens what may run on the machine of anyone who opens an agent session in a Kairos repository, so every addition follows the steps below. Any lane (an agent) may follow them; only a merge by Zach (Zach Rhodes, the owner) approves one.
+`hook-guard` (see the README's module table) fails any agent hook command (Claude's `.claude/settings.json`, Codex's `.codex/hooks.json` and inline `[hooks]` in `.codex/config.toml`) whose fingerprint (a SHA-256 content hash of the command text) isn't listed in the suite: under `"*"` for every repository, or under one repository's name. Adding a fingerprint widens what may run on the machine of anyone who opens an agent session in a Kairos repository, so every addition follows the steps below. Any lane (an agent) may follow them; only a merge by Zach (Zach Rhodes, the owner) approves one.
 
 Written for handoff (a delegated task record) HO-LYDIAN-20261122-228P (Zach, 2026-11-22: "yes, with a protocol for doing so"; DEC-263 clause 5, an entry in the Kairos decision ledger, which works like Architecture Decision Records). Earlier additions (#9, #10, #13, #20) were made without a written protocol; their records are in the table at the end.
 
@@ -8,7 +8,7 @@ Written for handoff (a delegated task record) HO-LYDIAN-20261122-228P (Zach, 202
 
 ### 1. Recompute
 
-Compute the fingerprint yourself, with hook-guard's own rule, from the `.claude/settings.json` at the head commit of the PR that needs it:
+Compute the fingerprint yourself, with hook-guard's own rule, from the `.claude/settings.json` (or `.codex/hooks.json`, or inline `[hooks]` in `.codex/config.toml`, whose commands hook-guard holds to the same allowlist) at the head commit of the PR that needs it:
 
 ```sh
 git show <head sha>:.claude/settings.json | python3 -c '
@@ -75,7 +75,7 @@ Open one PR, marked ready (not draft), titled `hook-guard: allow <what> (<first 
 
 Once the repository that needed the hook has merged it, look for fingerprints no repository uses any more:
 
-- read `.claude/settings.json` (and any committed `settings.local.json`) on the default branch of **every** repository that calls Lydian, **and** on their open PRs, before removing anything;
+- read `.claude/settings.json` (and any committed `settings.local.json`), `.codex/hooks.json` and `.codex/config.toml` on the default branch of **every** repository that calls Lydian, **and** on their open PRs, before removing anything;
 - remove only fingerprints that none of those use, in their own PR, naming each one and what replaced it (#10 is the precedent, after the Telosmith agent's (`claude:aec`) 63AR check);
 - remove its row in the table in the same PR.
 
@@ -106,3 +106,5 @@ Rows for entries added before this file existed were reconstructed on 2026-11-22
 | `e019ae40b515a54546c2e53699bca6863e6568da534264afd4bbc2d744719896` | `"*"` | Telosmith main inline hook | none (predates this file) | #10 | 2026-11-15 | 11 repositories | approved by merge (Zach) |
 | `599883c23c35ff4f4a2e45b4d6ec499c24bddb2e4e2a98d16bb383e71b4622d5` | `"*"` | Telosmith main inline hook after Telosmith#87 | none (predates this file) | #13 | 2026-11-17 | none on main | approved by merge (Zach) |
 | `6a932ff50b8cb633df087ff190346e8700ab0eaebf96f42b0d626fb2e68ea454` | `"*"` | Telosmith line launcher, `aec init --hook-style line` at `b91f78b` (traced byte-identical 2026-11-22) | `telosmith-line-b91f78b.txt` | #20, for MtG#59 | 2026-11-22 | MtG | approved by merge (Zach) |
+| `c8bfc0b9c546bbf7fa674b31a2d94e68c12b939f45eebd5e7881ad45b24819c8` | eraevous/crank-mem-eval | written by hand in crank-mem-eval#15 at `82d1ac7` (`.codex/hooks.json`, SessionStart) | `crank-codex-session-start-82d1ac7.txt` | this PR, for crank-mem-eval#15 (HO-CRK-20261124-N4ER) | pending | none on main (#15 only) | pending: approved by merge (Zach) |
+| `5d3502006184aff688dcfee310a4355e265013231a82b941b641c5cac4882471` | eraevous/crank-mem-eval | written by hand in crank-mem-eval#15 at `82d1ac7` (`.codex/hooks.json`, PostToolUse) | `crank-codex-post-write-82d1ac7.txt` | this PR, for crank-mem-eval#15 (HO-CRK-20261124-N4ER) | pending | none on main (#15 only) | pending: approved by merge (Zach) |
