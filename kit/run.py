@@ -311,8 +311,14 @@ def norm(name):
     macOS and Windows treat `.CLAUDE/settings.local.json` or `.MCP.json` as the real file, and Win32
     path normalization drops trailing dots and spaces, so `.claude.` may name `.claude` there (handled
     by string normalization only; not demonstrated on a Windows checkout).
+    HFS+ also ignores some invisible code points when it compares names, so `.cl\u200caude` opens
+    as `.claude` on a Mac (Codex on #30); they're dropped first, using Git's own list
+    (utf8.c, is_hfs_dotgeneric).
     """
-    return name.rstrip(". ").casefold()
+    return HFS_IGNORABLE.sub("", name).rstrip(". ").casefold()
+
+
+HFS_IGNORABLE = re.compile("[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]")
 
 
 def hook_guard(root, config, policy):
@@ -345,8 +351,39 @@ def hook_guard(root, config, policy):
     # path in the tree, then the fingerprints of what the root settings files and .mcp.json start.
     names = [e.name for e in root.iterdir()]
     checked = guard_root_modules(names, policy.get("forbidden_root_modules", []))
+    checked += guard_never_tracked(root, policy.get("paths_never_tracked", {}), repository)
     guard_agent_paths(root, names)
     return checked + guard_fingerprints(root, allowed, extras)
+
+
+def guard_never_tracked(root, mapping, repository):
+    """Fail if the checkout holds a folder the suite says this repository never commits; one case per name.
+
+    Why (Codex security review on #27; Zach chose this option on that thread, 2026-11-25): an
+    allowed hook that runs a script from a git-ignored folder, as crank-mem-eval's run
+    `.crank/hooks/*.ts`, is bound to nothing a branch can change only while that folder stays out of
+    git. CI's checkout holds only tracked files, so any entry by that name, at any depth and in any
+    case or trailing-character spelling, symlinks included, means a branch committed it.
+    """
+    if not isinstance(mapping, dict):
+        raise KitError("paths_never_tracked must be an object")
+    names = []
+    for repo, entries in mapping.items():
+        if not isinstance(entries, list) or not all(
+                isinstance(n, str) and n and "/" not in n and "\\" not in n for n in entries):
+            raise KitError("paths_never_tracked entries must be lists of single folder names")
+        if repo.lower() == repository:
+            names += entries
+    wanted = {norm(n) for n in names}
+    if not wanted:
+        return 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        if any(norm(n) in wanted for n in dirnames + filenames):
+            # The name is the suite's own, but the path is repository text, so it is not echoed.
+            raise KitError("repository has committed a folder this suite says must never be committed "
+                           "(paths_never_tracked; an allowed hook runs scripts from it)")
+    return len(wanted)
 
 
 def guard_root_modules(names, stems):
