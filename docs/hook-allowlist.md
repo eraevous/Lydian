@@ -46,6 +46,8 @@ A hook written by hand for one repository has no render to compare with. It can 
 
 Say which, and why, in the PR body. Add the fingerprint to both production suites (`suites/kairos-v1.json` and `suites/kairos-records-v1.json`) unless there's a reason one shouldn't carry it; say the reason.
 
+A fingerprint binds the command text, not the scripts it runs. If an allowed hook runs a script from a **git-ignored** folder (one a tool installs locally, as `crank-mem init` installs `.crank/hooks/`), add that folder's name under the repository in `paths_never_tracked`, in both production suites and in the same PR. hook-guard then fails any checkout that holds the folder, at any depth or spelling, because CI's checkout holds only committed files, so a branch can't replace the script while keeping the approved command (Codex security review on #27; Zach chose this, 2026-11-25). A hook that runs a script the repository does commit (MtG's `tools/…`) stays bound only by owner review of that script, as the module's documentation says.
+
 ### 4. Record
 
 JSON has no comments, so the record lives in the table at the end of this file, one row per fingerprint, in the same PR as the entry: the fingerprint, its scope, the source (repository and commit it was rendered from, or the PR that wrote it by hand), the hook's exact text as a fixture file under `tests/fixtures/hooks/`, the PR it serves, the date, and "approved by merge (Zach)".

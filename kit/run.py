@@ -239,22 +239,29 @@ YAML_TAG = re.compile(r"(?:^|[\s\[\]{},:?-])!")
 # (Codex security review on #12). A skill that merely mentions git-lfs fails too.
 LFS_POINTER = re.compile(rb"(?i)git-lfs|hawser|\boid\s+sha256\s*:")
 
+# Frontmatter keys that make Claude Code start something, matched as casefolded raw text: hooks (skills,
+# subagents), mcpServers (subagents: "MCP servers to connect when this agent runs"; skills too) and
+# lspServers (skills). Probed in Claude Code 2.1.330's frontmatter schemas, 2026-11-23.
+FRONTMATTER_RUNNABLE_KEYS = ("hooks", "mcpservers", "lspservers")
+
 
 def frontmatter_declares_hooks(path):
-    """True if a markdown file's YAML frontmatter could hold a hooks key.
+    """True if a markdown file's YAML frontmatter could hold a hooks, mcpServers or lspServers key.
 
     Claude Code runs hooks declared in skill and subagent frontmatter (code.claude.com/docs/en/hooks,
     "Hooks in skills and agents"; the format is the settings one). Lydian keeps no fingerprints for
     them, so any frontmatter that could declare one fails: a hook that must exist goes in
-    .claude/settings.json, where it is checked.
+    .claude/settings.json, where it is checked. Servers declared there (mcpServers in a subagent,
+    mcpServers or lspServers in a skill) start programs the same way, so the same rule covers their
+    keys (FRONTMATTER_RUNNABLE_KEYS); an MCP server that must exist goes in the root .mcp.json.
 
     No YAML parser (no third-party dependencies), so the rule doesn't try to tell keys from values:
-    the frontmatter fails if the word "hooks" appears anywhere in it, in any case, or if it uses an
-    escape that could spell a letter or join two lines, or a YAML tag (which can build a key from
-    other text, as !!binary does). Key-recognition rules kept being bypassed by
-    YAML's other key forms (escaped, explicit "?", flow, tagged; Codex on #12); a key named hooks
-    has to contain those five letters in the raw text unless an escape builds them. The cost: a
-    description that mentions "hooks" fails too, and gets reworded.
+    the frontmatter fails if one of those words ("hooks", "mcpservers", "lspservers") appears anywhere
+    in it, in any case, or if it uses an escape that could spell a letter or join two lines, or a YAML
+    tag (which can build a key from other text, as !!binary does). Key-recognition rules kept being
+    bypassed by YAML's other key forms (escaped, explicit "?", flow, tagged; Codex on #12); a key
+    named hooks has to contain those five letters in the raw text unless an escape builds them. The
+    cost: a description that mentions "hooks" (or "mcpServers") fails too, and gets reworded.
 
     The opening line may carry spaces, but only an exact "---" line (split on "\\n" alone) closes the
     frontmatter, so no other line break, "--- " line or "..." can end it early for this check while
@@ -274,7 +281,7 @@ def frontmatter_declares_hooks(path):
     for line in lines[1:]:
         if line == "---":
             return False
-        if "hooks" in line.casefold():
+        if any(key in line.casefold() for key in FRONTMATTER_RUNNABLE_KEYS):
             return True
         if any(LETTER_ESCAPE.search(piece) or YAML_TAG.search(piece) for piece in LINE_BREAKS.split(line)):
             return True
@@ -304,8 +311,14 @@ def norm(name):
     macOS and Windows treat `.CLAUDE/settings.local.json` or `.MCP.json` as the real file, and Win32
     path normalization drops trailing dots and spaces, so `.claude.` may name `.claude` there (handled
     by string normalization only; not demonstrated on a Windows checkout).
+    HFS+ also ignores some invisible code points when it compares names, so `.cl\u200caude` opens
+    as `.claude` on a Mac (Codex on #30); they're dropped first, using Git's own list
+    (utf8.c, is_hfs_dotgeneric).
     """
-    return name.rstrip(". ").casefold()
+    return HFS_IGNORABLE.sub("", name).rstrip(". ").casefold()
+
+
+HFS_IGNORABLE = re.compile("[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]")
 
 
 def hook_guard(root, config, policy):
@@ -341,9 +354,40 @@ def hook_guard(root, config, policy):
     # path in the tree, then the fingerprints of what the root settings files and .mcp.json start.
     names = [e.name for e in root.iterdir()]
     checked = guard_root_modules(names, policy.get("forbidden_root_modules", []))
+    checked += guard_never_tracked(root, policy.get("paths_never_tracked", {}), repository)
     guard_agent_paths(root, names)
     guard_codex_paths(root)
     return checked + guard_fingerprints(root, allowed, extras) + guard_codex_hooks(root, allowed)
+
+
+def guard_never_tracked(root, mapping, repository):
+    """Fail if the checkout holds a folder the suite says this repository never commits; one case per name.
+
+    Why (Codex security review on #27; Zach chose this option on that thread, 2026-11-25): an
+    allowed hook that runs a script from a git-ignored folder, as crank-mem-eval's run
+    `.crank/hooks/*.ts`, is bound to nothing a branch can change only while that folder stays out of
+    git. CI's checkout holds only tracked files, so any entry by that name, at any depth and in any
+    case or trailing-character spelling, symlinks included, means a branch committed it.
+    """
+    if not isinstance(mapping, dict):
+        raise KitError("paths_never_tracked must be an object")
+    names = []
+    for repo, entries in mapping.items():
+        if not isinstance(entries, list) or not all(
+                isinstance(n, str) and n and "/" not in n and "\\" not in n for n in entries):
+            raise KitError("paths_never_tracked entries must be lists of single folder names")
+        if repo.lower() == repository:
+            names += entries
+    wanted = {norm(n) for n in names}
+    if not wanted:
+        return 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        if any(norm(n) in wanted for n in dirnames + filenames):
+            # The name is the suite's own, but the path is repository text, so it is not echoed.
+            raise KitError("repository has committed a folder this suite says must never be committed "
+                           "(paths_never_tracked; an allowed hook runs scripts from it)")
+    return len(wanted)
 
 
 def guard_root_modules(names, stems):
@@ -411,9 +455,10 @@ def guard_agent_paths(root, names):
                         raise KitError("a file under .claude is a Git LFS pointer, whose real contents the guard can't inspect")
             if in_claude and norm(f).endswith(".md") and frontmatter_declares_hooks(here / f):
                 # The file's path is repository text, so it is not echoed.
-                raise KitError("a skill, subagent or command file under .claude declares hooks in its "
-                               "frontmatter; the guard can't fingerprint those, so declare the hook in "
-                               ".claude/settings.json")
+                raise KitError("a skill, subagent or command file under .claude declares hooks or servers "
+                               "(hooks, mcpServers, lspServers) in its frontmatter; the guard can't "
+                               "fingerprint those, so declare a hook in .claude/settings.json and an MCP "
+                               "server in the root .mcp.json")
 
 
 def guard_fingerprints(root, allowed, extras):
