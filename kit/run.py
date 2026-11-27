@@ -1804,10 +1804,61 @@ def new_dependencies(root, config, policy):
     return result
 
 
+# ---- Pull-request description guard: closing-keywords (HO-LYD-20261127-HA08) --------------------
+# GitHub closes an issue or PR when a merged PR's description puts a closing keyword before a
+# reference to it. Lydian #27 closed itself when #30 merged, because #30 said "It closes #27's open
+# security finding". The keyword lists GitHub's own (close/closes/closed, fix/fixes/fixed,
+# resolve/resolves/resolved, any case, optional colon); the reference is #N, owner/repo#N or an
+# issues/pull URL. Stricter than GitHub where unsure (no space needed after the keyword, and code
+# spans and HTML comments are scanned too): a false alarm costs one marker, a miss closes an issue.
+CLOSING_REFERENCE = re.compile(
+    r"(?i)(?<![\w-])(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[ \t]*:?[ \t]*"
+    r"(?:(?:[\w.-]+/[\w.-]+)?#\d+|https?://github\.com/[\w.-]+/[\w.-]+/(?:issues|pull)/\d+)")
+INTENDS_CLOSE = re.compile(r"<!--[ \t]*intends-close[ \t]*-->")
+
+
+def closing_keywords(root, config, policy):
+    """Fail a PR description whose closing keyword would close an issue or PR on merge, unless the
+    line says so with <!-- intends-close -->. Reads only KAIROS_PR_BODY; needs no base revision.
+
+    Known limit: the shared workflow runs on the caller's events. A caller without the `edited`
+    pull_request type checks the body as it was at the last push, open or reopen.
+    """
+    if os.environ.get("KAIROS_EVENT_NAME", "") != "pull_request":
+        return {"cases": 0, "note": "not a pull request: no description to check"}
+    author = os.environ.get("KAIROS_PR_AUTHOR", "")
+    if author in BOTS_EXEMPT:
+        return {"cases": 0, "note": f"{author}: dependabot pull requests are exempt"}
+    enforce_from = policy.get("enforce_from", "")
+    created = os.environ.get("KAIROS_PR_CREATED_AT", "")
+    warn_only = bool(enforce_from and created and created < enforce_from)
+    findings, intended = [], 0
+    for number, line in enumerate(re.split(r"\r\n|\r|\n", os.environ.get("KAIROS_PR_BODY", "") or ""), 1):
+        hits = [m.group(0) for m in CLOSING_REFERENCE.finditer(line)]
+        if not hits:
+            continue
+        if INTENDS_CLOSE.search(line):
+            intended += 1
+            continue
+        shown = ", ".join(repr(h if len(h) <= 120 else h[:117] + "...") for h in hits[:3])
+        findings.append(f"line {number}: {shown}")
+    if not findings:
+        return {"cases": 1, "note": f"{intended} intended closing line(s)"} if intended else {"cases": 1}
+    summary = (f"PR description would close on merge, {len(findings)} line(s): " + "; ".join(findings[:10])
+               + (f"; and {len(findings) - 10} more" if len(findings) > 10 else ""))
+    if warn_only:
+        return {"cases": 1, "note": "pull request opened before enforcement: warning only",
+                "warnings": [summary]}
+    raise KitError(summary + ". If closing is intended, add <!-- intends-close --> to that line; "
+                   "otherwise reword it (for example 'addresses #27' or 'follows #27'). A body edit "
+                   "is checked on the next run (push, or an edit where the caller triggers on edited)")
+
+
 MODULES = {"interoperability": interoperability, "modularity": modularity,
            "repository-tests": repository_tests, "repository-commands": repository_commands,
            "hook-guard": hook_guard, "telosmith": telosmith,
-           "test-tampering": test_tampering, "new-dependencies": new_dependencies}
+           "test-tampering": test_tampering, "new-dependencies": new_dependencies,
+           "closing-keywords": closing_keywords}
 
 
 def flag(policy, key):
