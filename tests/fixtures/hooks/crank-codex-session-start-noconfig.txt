@@ -1,0 +1,1 @@
+[ ! -f .crank/hooks/session-start.ts ] || bun --config=/dev/null --env-file=/dev/null .crank/hooks/session-start.ts

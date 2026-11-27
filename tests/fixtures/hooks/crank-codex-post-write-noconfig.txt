@@ -1,0 +1,1 @@
+[ ! -f .crank/hooks/post-write.ts ] || bun --config=/dev/null --env-file=/dev/null .crank/hooks/post-write.ts
