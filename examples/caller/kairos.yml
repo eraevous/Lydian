@@ -2,10 +2,13 @@
 # @main (DEC-210): a merged Lydian change reaches every repo on its next run; no tag to move. Rollback: revert on Lydian main, or pin to a full SHA.
 name: kairos
 # Pushes to the default branch plus pull requests: one run per PR update, not two.
+# `edited` re-runs the checks when a PR's description changes, so the closing-keywords guard sees
+# the body GitHub will read at merge (HO-LYD-20261127-HA08); the other types are GitHub's defaults.
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 jobs:
   checks:
     uses: eraevous/Lydian/.github/workflows/kairos-checks.yml@main

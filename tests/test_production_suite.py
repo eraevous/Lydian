@@ -71,8 +71,9 @@ class ProductionSuiteTests(unittest.TestCase):
             self.assertEqual({m["module"]: m["status"] for m in report["modules"]},
                              {"repository-tests": "passed", "telosmith": "passed",
                               "repository-commands": "not-declared", "hook-guard": "passed",
-                      # Not a pull request here, so both PR guards pass with nothing to compare.
-                      "test-tampering": "passed", "new-dependencies": "passed"})
+                      # Not a pull request here, so the PR guards pass with nothing to compare.
+                      "test-tampering": "passed", "new-dependencies": "passed",
+                      "closing-keywords": "passed"})
 
 
 HOOK_GUARD_SUITES = ("kairos-v1", "kairos-records-v1")

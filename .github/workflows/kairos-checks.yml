@@ -55,9 +55,10 @@ jobs:
           # Code-impact (report-only, DEC-256): the event's base revision; the kit skips it when absent.
           KAIROS_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           KAIROS_CODE_IMPACT_OUT: ${{ runner.temp }}/code-impact.md
-          # Pull-request guards (test-tampering, new-dependencies): read from the event payload, never
-          # from the repository. Empty outside a pull request, where both guards check nothing.
-          # A re-run reuses the payload, so a body edit takes effect on the next push.
+          # Pull-request guards (test-tampering, new-dependencies, closing-keywords): read from the event
+          # payload, never from the repository. Empty outside a pull request, where they check nothing.
+          # A re-run reuses the payload, so a body edit takes effect on the next push, or at once where
+          # the caller triggers on `edited` (examples/caller/kairos.yml).
           KAIROS_EVENT_NAME: ${{ github.event_name }}
           KAIROS_PR_BODY: ${{ github.event.pull_request.body }}
           KAIROS_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
