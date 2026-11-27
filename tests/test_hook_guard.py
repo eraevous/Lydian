@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -761,16 +763,69 @@ class ProductionAllowlist(unittest.TestCase):
             with mock.patch.dict(os.environ, {"KAIROS_REPOSITORY": repo}):
                 return kit.evaluate(Path(tmp), adapter, suite)
 
-    # Exact bytes of crank-mem-eval#15's two .codex/hooks.json commands at 82d1ac7, written by hand
-    # for that repository (docs/hook-allowlist.md: repository scope).
-    CRANK_CODEX = {"crank-codex-session-start-82d1ac7.txt": "c8bfc0b9", "crank-codex-post-write-82d1ac7.txt": "5d350200"}
+    # crank-mem-eval#15's two .codex/hooks.json commands at 82d1ac7, with `--config=/dev/null` added
+    # by hand so bun reads no project bunfig.toml (docs/hook-allowlist.md: repository scope).
+    CRANK_CODEX = {"crank-codex-session-start-noconfig.txt": "b4953a77", "crank-codex-post-write-noconfig.txt": "3c29f74f"}
+    # The same commands as #15 wrote them at 82d1ac7: bun still read $cwd/bunfig.toml, so a branch
+    # adding one with `preload = [...]` ran its own script under the approved command (Codex P1 on #27,
+    # review 6081461968). No longer allowed; kept as the decoys.
+    CRANK_CODEX_82D1AC7 = {"crank-codex-session-start-82d1ac7.txt": "c8bfc0b9", "crank-codex-post-write-82d1ac7.txt": "5d350200"}
 
-    def crank_codex_hooks(self):
-        commands = [(HOOK_FIXTURES / f).read_bytes().decode("utf-8") for f in self.CRANK_CODEX]
-        self.assertEqual([sha(c)[:8] for c in commands], list(self.CRANK_CODEX.values()))
+    def fixtures(self, table):
+        commands = [(HOOK_FIXTURES / f).read_bytes().decode("utf-8") for f in table]
+        self.assertEqual([sha(c)[:8] for c in commands], list(table.values()))
         return commands
 
-    def test_crank_codex_hooks_82d1ac7_pass_only_for_crank_mem_eval(self):
+    def crank_codex_hooks(self):
+        return self.fixtures(self.CRANK_CODEX)
+
+    def test_every_allowed_bun_hook_ignores_project_bun_config(self):
+        # Must flag: any allowed command that runs bun without --config=/dev/null (bun 1.4 reads
+        # $cwd/bunfig.toml otherwise; `-c /dev/null` misparses as a preload, so only the = form counts).
+        for f in sorted(HOOK_FIXTURES.iterdir()):
+            command = f.read_bytes().decode("utf-8")
+            if sha(command) not in {p for n in PRODUCTION_SUITES
+                                    for ps in production_policy(n)["allowed_hook_commands_sha256"].values() for p in ps}:
+                continue
+            for run in re.findall(r"\bbun\b[^;&|]*", command):
+                with self.subTest(fixture=f.name):
+                    self.assertRegex(run, r"^bun (--[a-z-]+=\S+ )*--config=/dev/null ")
+
+    def test_crank_codex_hooks_82d1ac7_no_longer_pass(self):
+        # Codex's reproduction, the guard half: the bare-config commands now fail for crank-mem-eval.
+        for command in self.fixtures(self.CRANK_CODEX_82D1AC7):
+            for name in PRODUCTION_SUITES:
+                with self.subTest(suite=name, command=command[-20:]):
+                    r = self.codex_guard(command, name, "eraevous/crank-mem-eval")
+                    self.assertEqual(r["gate"], "failed")
+                    self.assertIn("not on the central allowlist", r["modules"][0]["reason"])
+
+    @unittest.skipUnless(shutil.which("bun"), "bun not installed")
+    def test_approved_crank_hook_does_not_run_a_bunfig_preload(self):
+        # Codex's reproduction, the runtime half: a checkout holding the locally installed .crank/hooks/
+        # plus a branch's bunfig.toml preload. The decoy (82d1ac7's command) runs the preload; the
+        # approved command must not, and must still run the hook.
+        approved = dict(zip(self.CRANK_CODEX, self.crank_codex_hooks()))
+        old = dict(zip(self.CRANK_CODEX_82D1AC7, self.fixtures(self.CRANK_CODEX_82D1AC7)))
+        pairs = [(approved["crank-codex-session-start-noconfig.txt"], old["crank-codex-session-start-82d1ac7.txt"]),
+                 (approved["crank-codex-post-write-noconfig.txt"], old["crank-codex-post-write-82d1ac7.txt"])]
+        for good, bad in pairs:
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                (repo / ".crank" / "hooks").mkdir(parents=True)
+                for hook in ("session-start.ts", "post-write.ts"):
+                    (repo / ".crank" / "hooks" / hook).write_text('require("fs").writeFileSync("hook-ran", "");\n')
+                (repo / "evil.ts").write_text('require("fs").writeFileSync("preload-ran", "");\n')
+                (repo / "bunfig.toml").write_text('preload = ["./evil.ts"]\n')
+                for command, preload_runs in ((bad, True), (good, False)):
+                    with self.subTest(command=command[-30:]):
+                        for marker in ("hook-ran", "preload-ran"):
+                            (repo / marker).unlink(missing_ok=True)
+                        subprocess.run(["sh", "-c", command], cwd=repo, timeout=60, capture_output=True)
+                        self.assertTrue((repo / "hook-ran").exists())
+                        self.assertEqual((repo / "preload-ran").exists(), preload_runs)
+
+    def test_crank_codex_hooks_noconfig_pass_only_for_crank_mem_eval(self):
         for command in self.crank_codex_hooks():
             for name in PRODUCTION_SUITES:
                 with self.subTest(suite=name, command=command[-20:]):
